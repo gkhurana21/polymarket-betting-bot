@@ -1,0 +1,201 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Polymarket Betting Bot — runtime configuration
+#  See PLAN.md §6 for the full schema. Every value here is configurable;
+#  there are no magic numbers in code.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─── dry_run ───────────────────────────────────────────────────────────────
+#  THE most consequential key in this file. The live/paper boundary.
+#
+#  Phase A (current):
+#    true   → paper-trade four streams to data/trades.db, audit to
+#             data/audit.jsonl. The only correct value.
+#    false  → main.py refuses to start with a loud error pointing to
+#             PLAN.md §0. Live trading is not built yet. Do not flip this.
+#
+#  Phase B (only after readiness gate AND decision-matrix verdict ∈
+#          {BUILD_B_RELAXED, BUILD_B_FULL}):
+#    true   → paper only (still useful for ongoing comparison)
+#    false  → live orders via CLOB. The 2 a.m. mistake key.
+# ───────────────────────────────────────────────────────────────────────────
+dry_run: true
+
+phase: A                                     # informational; A or B
+
+network:
+  polygon_rpc_urls:                          # tried in order (Phase B uses)
+    - https://polygon-rpc.com
+    - https://polygon.llamarpc.com
+  ctf_exchange: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+
+bot:
+  log_level: INFO
+  data_dir: ./data
+  db_path: ./data/trades.db
+  audit_log_path: ./data/audit.log.jsonl
+  state_path: ./data/state.json
+
+intervals_seconds:
+  whale_poll: 60
+  market_scan: 600
+  book_snapshot: 600                         # piggybacks on scan
+  pending_sweep: 600                         # piggybacks on scan; materialises due deferred trades
+  resolution_poll: 1800
+
+market_filters:
+  binary_only: true
+  outcome_labels: ["Yes", "No"]              # case-insensitive; widen here for Phase B
+  min_volume_24h_usd: 10000
+  min_liquidity_usd: 5000
+  max_spread_bps: 200
+  blacklist_categories: ["crypto-prices"]
+  blacklist_keywords: ["BTC price", "ETH price", "SOL price"]
+  whitelist_categories: []
+
+book_snapshot:
+  depth_levels: 10                           # each side
+  store_as_json: true                        # full {bids:[…10], asks:[…10]} blob
+
+whale_universe:
+  top_n_from_leaderboard: 50
+  min_all_time_profit_usd: 50000
+  manual_seed: []                            # [{address, label, trust}]
+  manual_overrides_path: ./data/whales_manual.json   # CLI add-whale writes here
+
+paper_streams:
+  copy_whale:
+    enabled: true
+    size_mode: proportional                  # paper $ ≈ whale $ × scale, then clamped
+    proportional_scale: 0.01                 # 1 % of whale's bet size
+    min_paper_size_usd: 5
+    max_paper_size_usd: 500
+    acts_on_signal_types: [open, add]
+
+  stub_blend:
+    enabled: true
+    alpha: 0.5
+    beta: 0.0
+    gamma: 0.5
+    trust_prior: 0.7                         # uniform during Phase A
+    size_usd: 100
+    acts_on_signal_types: [open, add, exit, flip]    # all signal types — stub
+                                                     # is a placeholder for Phase B
+                                                     # blend output, which weighs
+                                                     # exits/flips in its formula
+
+  null_random_side:
+    enabled: true
+    size_usd: 100
+    seed_strategy: market_id                 # random.seed(market_id) — deterministic across runs
+    acts_on_signal_types: [open, add, exit, flip]    # null baseline must be
+                                                     # comparable to copy_whale
+                                                     # on every signal it sees
+
+  whale_side_random_timing:
+    enabled: true
+    size_usd: 100
+    delay_window_seconds: 86400              # uniform sample [0, 24 h]
+    seed_strategy: signal_id                 # random.seed(signal_id) — independent per signal
+    miss_tolerance_seconds: 1800             # if sweep arrives this far past scheduled_for_ts,
+                                             # void with VOIDED_MISSED_WINDOW (do NOT back-fill —
+                                             # stale mid would corrupt the timing-null comparison)
+    max_snapshot_staleness_seconds: 900      # entry mid must be from a snapshot ≤ this old at
+                                             # materialisation; else void as MISSED_WINDOW
+    acts_on_signal_types: [open, add]
+
+calibration_readiness:
+  min_resolved_trades: 50                    # only resolved_outcome IN ('YES','NO');
+                                             # VOIDED_* and INVALID excluded
+  min_whales_with_min_trades: 5
+  min_trades_per_whale: 5
+  min_calendar_days: 14
+
+whale_tracker:
+  queue_max: 10000                           # bounded queue; overflow drops oldest
+  dedup_window_ms: 300000                    # 5 min in-memory dedup window
+  page_size: 100                             # data-api page size
+  max_pages_per_wallet: 20                   # hard cap (10k trades / wallet / poll)
+  latency_window: 1000                       # rolling latency samples for p50/p95/p99
+  latency_log_every_polls: 5                 # log percentiles every N poll cycles
+  max_signal_age_ms: 60000                   # signals older than this → recorded
+                                             # to DB but NOT enqueued (prevents
+                                             # cold-start floods of stale trades
+                                             # from polluting paper_trader)
+
+paper_trader:
+  snapshot_max_staleness_seconds: 900        # market_snapshot must be ≤ this old
+  consumer_summary_every_n: 50               # INFO summary every N signals (serve mode)
+  consumer_summary_interval_seconds: 300     # …or every 5 min, whichever comes first
+                                             # at consume time for stub_blend /
+                                             # null_random_side to act; else skip.
+                                             # Comfortable margin over the 600s
+                                             # scan interval.
+
+decision_matrix:
+  min_winrate_gap_pp: 5.0                    # copy_whale must beat null_random_side by ≥ this
+  max_p_value: 0.10                          # two-proportion z-test (Fisher's exact at small N)
+  inconclusive_extension_days: 14            # extend Phase A this much if INCONCLUSIVE
+
+# Whale trust tracking (bot/whale_perf.py). Split from deprecated trust_score:.
+whale_perf:
+  prior_alpha: 7                             # Beta(7,3) ⇒ prior mean 0.7, total weight 10
+  prior_beta: 3
+  manual_override_total_weight: 10           # add-whale --trust seeds α+β=10
+  trust_mean_min: 0.0                        # Floor at 0.0 — auto-blacklist handles low trust
+  trust_mean_max: 0.95                       # Ceiling — prevents pathological copy-sizing in Phase B
+  blacklist_threshold: 0.35                  # Phase A: log + flag only; no universe removal
+  attribution_strategy_id: copy_whale        # only this stream updates whale trust
+
+# DEPRECATED: split into whale_perf (whale trust) and strategy.trust_blend (Phase B blend
+# formula). Will be removed when Phase B ships. whale_perf.py reads whale_perf: only.
+trust_score:
+  prior_alpha: 7
+  prior_beta: 3
+  manual_override_total_weight: 10
+  min: 0.0                                   # was 0.1 — PLAN deviation module-9 (see PLAN.md §6)
+  max: 0.95
+
+reconnect:
+  retry_max_attempts: 5                      # max per-request retry attempts before giving up
+  initial_backoff_seconds: 2
+  max_backoff_seconds: 300
+  multiplier: 2.0
+  circuit_breaker_consecutive_fails: 5
+
+# ──────────────────────────────────────────────────────────────────────────
+#  Phase B sections — inert in Phase A. Loaded but unused.
+#  Calibration will overwrite tunable values here in data/calibration.yaml.
+# ──────────────────────────────────────────────────────────────────────────
+strategy:                                    # [Phase B]
+  min_edge_pct: 0.03
+  max_bet_pct_bankroll: 0.05
+  kelly_fraction: 0.25
+  blend:
+    alpha_max: 0.6
+    beta_max: 0.5
+    lambda_decay_per_min: 0.02               # OVERWRITTEN by calibration fit
+    sigmoid_steepness: 3.0
+    quant_score_default: 0.5
+    avg_bet_lookback_days: 30
+
+market_efficiency:                           # [Phase B]
+  spread_weight: 0.4
+  depth_weight: 0.3
+  volume_weight: 0.3
+  spread_tight_bps: 50
+  spread_wide_bps: 500
+  depth_full_usd: 50000
+  volume_full_usd_24h: 1000000
+
+risk:                                        # [Phase B]
+  max_open_positions: 10
+  max_daily_drawdown_pct: 0.05
+  max_slippage_bps: 100
+  duplicate_market_block: true
+  bankroll_floor_usd: 100
+
+execution:                                   # [Phase B]
+  order_type: GTC
+  limit_offset_bps: 5
+  retry_attempts: 3
+  retry_backoff_seconds: 2

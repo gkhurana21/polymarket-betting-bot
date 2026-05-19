@@ -1,0 +1,33 @@
+# Polymarket Betting Bot — Phase A + Phase B dependencies
+# LOCKED ARTIFACT. Modify only via additions explicitly logged in PLAN.md.
+
+# Polymarket CLOB SDK
+py-clob-client>=0.18.0
+
+# Config & secrets
+python-dotenv>=1.0.0
+pyyaml>=6.0
+
+# Logging & CLI rendering
+rich>=13.0
+
+# HTTP
+requests>=2.31
+aiohttp>=3.9
+
+# On-chain (Phase B uses; imported lazily — never loaded in Phase A)
+web3>=6.0
+
+# Data models
+dataclasses-json>=0.6
+
+# Scheduling & time
+schedule>=1.2
+python-dateutil>=2.8
+
+# Statistics (calibration decision matrix: two-proportion z-test + Fisher's exact)
+scipy>=1.11
+
+# Testing
+pytest>=7.4
+pytest-mock>=3.12

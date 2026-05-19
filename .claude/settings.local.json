@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import yaml; c = yaml.safe_load\\(open\\('config.yaml'\\)\\); assert c['dry_run'] is True; assert c['phase'] == 'A'; assert c['paper_streams']['whale_side_random_timing']['miss_tolerance_seconds'] == 1800; print\\('config.yaml OK'\\)\")",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/python tests/smoke_module1.py)",
+      "Bash(.venv/bin/python tests/smoke_module2.py)",
+      "Bash(.venv/bin/python tests/smoke_module3.py)",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python tests/smoke_module6.py)",
+      "Bash(.venv/bin/python tests/smoke_module7.py)",
+      "Bash(.venv/bin/python tests/smoke_module4.py)",
+      "Bash(.venv/bin/python tests/smoke_module8.py)"
+    ]
+  }
+}
