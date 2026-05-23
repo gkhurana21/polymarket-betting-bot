@@ -125,7 +125,8 @@ def _load_whale_universe(
             profit = float(row.get("amount") or row.get("profit") or 0)
             if profit < min_profit:
                 continue
-            addr = (row.get("address") or row.get("user") or "").strip().lower()
+            # API returns proxyWallet; fall back to address/user for schema resilience.
+            addr = (row.get("proxyWallet") or row.get("address") or row.get("user") or "").strip().lower()
             if addr and addr not in by_addr:
                 by_addr[addr] = {
                     "address": addr,
