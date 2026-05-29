@@ -94,7 +94,10 @@ paper_streams:
   whale_side_random_timing:
     enabled: true
     size_usd: 100
-    delay_window_seconds: 86400              # uniform sample [0, 24 h]
+    delay_window_seconds: 3600               # uniform sample [0, 1 h] — PLAN deviation (Phase A.2):
+                                             # reduced from 24 h because whales target near-resolution
+                                             # markets that typically close in hours, causing 77% of
+                                             # 24-h window trades to VOID_PRE_FILL before materialising
     seed_strategy: signal_id                 # random.seed(signal_id) — independent per signal
     miss_tolerance_seconds: 1800             # if sweep arrives this far past scheduled_for_ts,
                                              # void with VOIDED_MISSED_WINDOW (do NOT back-fill —

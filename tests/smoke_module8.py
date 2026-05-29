@@ -425,6 +425,67 @@ def main() -> int:
         tk.close()
     print("  test 13: concurrent consume → 6 paper_trades + 2 pending        OK")
 
+    # ── 14: on-demand fallback — live book used when no snapshot exists ──
+    class _MockClient:
+        def get_order_book(self, market_id: str) -> dict:
+            return {"bids": [[0.44, 100]], "asks": [[0.46, 100]]}
+
+    with tempfile.TemporaryDirectory() as td:
+        tk = _fresh_tracker(Path(td))
+        sig = _seed_whale_signal(tk, market="m14", side="YES",
+                                 signal_type="open", price=0.45, size_usd=200.0,
+                                 txhash="0xtx_14")
+        # No market_snapshot seeded — fallback must fire via mock client.
+        pt = PaperTrader(tracker=tk, client=_MockClient(), config=_FULL_CFG)
+        out = pt.consume_signal(sig)
+        strategies = {t.strategy_id for t in out}
+        # stub_blend + null_random_side must fire via the live-book fallback.
+        assert "stub_blend" in strategies, f"stub_blend missing: {strategies}"
+        assert "null_random_side" in strategies, f"null_random_side missing: {strategies}"
+        # copy_whale fires on open regardless; whale_side_random_timing goes to pending.
+        assert "copy_whale" in strategies
+        assert len(out) == 3
+        # book_snapshot row must have been written before mid computation.
+        snap_row = tk._conn.execute(
+            "SELECT book_json FROM book_snapshots WHERE market_id='m14'"
+        ).fetchone()
+        assert snap_row is not None, "book_snapshot not persisted by fallback"
+        assert '"bids"' in snap_row["book_json"]
+        # entry price must be mid = (0.44 + 0.46) / 2 = 0.45
+        sb = next(t for t in out if t.strategy_id == "stub_blend")
+        assert math.isclose(sb.entry_price, 0.45, abs_tol=1e-9) or \
+               math.isclose(sb.entry_price, 1 - 0.45, abs_tol=1e-9), \
+               f"unexpected stub_blend entry_price: {sb.entry_price}"
+        tk.close()
+    print("  test 14: on-demand book fallback → stub+null fire, "
+          "book_snapshot written  OK")
+
+    # ── 15: on-demand fallback — CircuitBreakerOpen skips streams ────
+    from bot.client import CircuitBreakerOpen
+
+    class _BrokenClient:
+        def get_order_book(self, market_id: str) -> dict:
+            raise CircuitBreakerOpen("circuit open")
+
+    with tempfile.TemporaryDirectory() as td:
+        tk = _fresh_tracker(Path(td))
+        sig = _seed_whale_signal(tk, market="m15", side="YES",
+                                 signal_type="open", price=0.5, size_usd=100.0,
+                                 txhash="0xtx_15")
+        # No snapshot; client raises CircuitBreakerOpen.
+        pt = PaperTrader(tracker=tk, client=_BrokenClient(), config=_FULL_CFG)
+        out = pt.consume_signal(sig)
+        strategies = {t.strategy_id for t in out}
+        # copy_whale still fires (doesn't need a snapshot).
+        assert "copy_whale" in strategies
+        # stub_blend + null_random_side must be absent.
+        assert "stub_blend" not in strategies, strategies
+        assert "null_random_side" not in strategies, strategies
+        assert len(out) == 1
+        tk.close()
+    print("  test 15: CircuitBreakerOpen → stub+null skipped, "
+          "copy_whale unaffected  OK")
+
     print("\nmodule 8 smoke: OK")
     return 0
 

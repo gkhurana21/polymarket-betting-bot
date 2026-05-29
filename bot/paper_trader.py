@@ -67,8 +67,8 @@ from typing import Any
 
 from dataclasses_json import DataClassJsonMixin
 
-from bot.client import ClobReadOnlyClient
-from bot.models import PaperTrade, PendingPaperTrade, WhaleSignal
+from bot.client import CircuitBreakerOpen, ClobReadOnlyClient
+from bot.models import BookSnapshot, MarketSnapshot, PaperTrade, PendingPaperTrade, WhaleSignal
 from bot.tracker import Tracker
 from utils.helpers import now_ms
 from utils.logger import get_logger
@@ -207,6 +207,9 @@ class PaperTrader:
                         signal.market_id[:10], age_ms, self._consume_snap_max_age_ms,
                     )
                     snap = None
+            # on-demand fallback: fetch live book when no fresh snapshot exists
+            if snap is None and self._client is not None:
+                snap = self._fetch_and_cache_book_as_snapshot(signal.market_id)
 
         if self._sb_enabled and sig_type in self._sb_acts and snap is not None:
             pt = self._build_stub_blend(signal, snap.mid)
@@ -294,6 +297,47 @@ class PaperTrader:
             decided_at_ts=now_ms(),
             entry_price=entry,
         )
+
+    def _fetch_and_cache_book_as_snapshot(
+        self, market_id: str
+    ) -> MarketSnapshot | None:
+        """On-demand fallback: fetch a live order book, persist it to
+        book_snapshots, and return a synthetic MarketSnapshot carrying the
+        computed mid. Returns None on CircuitBreakerOpen or a one-sided book.
+
+        PLAN deviation (Phase A.2): added to fix the snapshot coverage gap
+        where stub_blend / null_random_side silently skipped ~99.7% of signals
+        because the periodic 10-min scanner only covered a subset of markets.
+        """
+        assert self._client is not None
+        try:
+            book = self._client.get_order_book(market_id)
+        except CircuitBreakerOpen:
+            _log.warning(
+                "paper_trader: circuit breaker open fetching live book for %s "
+                "— stub_blend / null_random_side will not fire for this signal",
+                market_id[:16],
+            )
+            return None
+
+        ts = now_ms()
+        book_json = json.dumps(book, separators=(",", ":"))
+
+        # Persist BEFORE computing mid so the cache lands even if downstream fails.
+        self._tracker.record_book_snapshot(
+            BookSnapshot(market_id=market_id, ts=ts, book_json=book_json)
+        )
+
+        mid = self._compute_mid_from_book_json(book_json)
+        if mid is None:
+            _log.info(
+                "paper_trader: live book for %s is one-sided "
+                "— stub_blend / null_random_side skipped",
+                market_id[:16],
+            )
+            return None
+
+        return MarketSnapshot(market_id=market_id, ts=ts, mid=mid)
 
     def _build_whale_side_random_timing(
         self, signal: WhaleSignal

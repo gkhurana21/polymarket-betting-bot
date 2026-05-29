@@ -567,9 +567,15 @@ For every whale signal with `signal_type ∈ {open, add}`, all four enabled stre
 | `copy_whale` | same as whale | immediate (current scan tick mid) | whale's own fill `price` (from signal) | `clamp(whale_size · proportional_scale, [min, max])` |
 | `stub_blend` | side with higher `P_true` per stub formula (α=0.5, β=0, γ=0.5) | immediate | latest market_snapshot mid (or `1−mid` for NO side) | fixed `size_usd` |
 | `null_random_side` | **random YES/NO**, `random.Random(market_id)` (deterministic across runs) | immediate | latest market_snapshot mid (or `1−mid` for NO) | fixed `size_usd` |
-| `whale_side_random_timing` | same as whale | **deferred**: random delay ∈ [0, 24 h], `random.Random(signal_id)`, materialised on next pending-sweep tick after `scheduled_for_ts` | mid at materialisation tick (from latest fresh `book_snapshots`) | fixed `size_usd` |
+| `whale_side_random_timing` | same as whale | **deferred**: random delay ∈ [0, 1 h] *(Phase A.2 deviation: reduced from 24 h — see below)*, `random.Random(signal_id)`, materialised on next pending-sweep tick after `scheduled_for_ts` | mid at materialisation tick (from latest fresh `book_snapshots`) | fixed `size_usd` |
 
 **`acts_on_signal_types` per stream** (revised at module-8 build): `copy_whale` and `whale_side_random_timing` act on `[open, add]` only. `stub_blend` and `null_random_side` act on **all four** signal types (`open, add, exit, flip`) — the null baseline must be comparable to copy_whale on every observable, and stub is a placeholder for Phase B blend output which weighs every signal type.
+
+**Phase A.2 PLAN deviations:**
+
+1. **Snapshot on-demand fallback** (`stub_blend` / `null_random_side`): the original design required a fresh cached `market_snapshot` (≤15 min old) at signal-consume time. In practice ~99.7% of signals had no fresh snapshot for their specific market, causing both streams to produce zero rows during Phase A. Fix: when `get_latest_market_snapshot` returns `None` or a stale row, `paper_trader` calls `client.get_order_book(market_id)`, writes the result to `book_snapshots` (so future signals for the same market benefit from the cache), and uses the computed best-bid/ask mid as the entry price. `CircuitBreakerOpen` → WARNING + skip both streams. One-sided book → INFO + skip.
+
+2. **`delay_window_seconds` reduced from 86400 → 3600** (`whale_side_random_timing`): 77% of Phase A trades in this stream voided with `VOIDED_PRE_FILL` because whales disproportionately trade markets near resolution (hours, not days). A 24-hour random delay was longer than most market resolution horizons. Reduced to 1 hour so the fill window has a realistic chance of preceding resolution.
 
 **`whale_side_random_timing` mechanics:**
 - On signal: write `pending_paper_trades` row, status `pending`, `scheduled_for_ts = now + uniform(0, delay_window_seconds)` seeded by `signal_id`.
