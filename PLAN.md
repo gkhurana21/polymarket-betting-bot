@@ -505,6 +505,20 @@ CREATE TABLE resolved_markets (
   resolved_at_ts INTEGER NOT NULL
 );
 
+-- market_token_map: condition_id → YES token_id lookup.
+-- PLAN deviation (Phase A.2.1): original Fix 1 (Phase A.2) called
+-- get_order_book(condition_id) which the CLOB API rejects with 404 —
+-- the API requires a token_id (the YES outcome token). This table is
+-- populated by MarketScanner on every scan tick (one upsert per market
+-- per cycle) so paper_trader's on-demand fallback can resolve the
+-- correct token before calling get_order_book. Result: 821 silent 404
+-- failures eliminated; stub_blend and null_random_side now fire.
+CREATE TABLE market_token_map (
+  condition_id  TEXT PRIMARY KEY,
+  yes_token_id  TEXT NOT NULL,
+  updated_at_ts INTEGER NOT NULL
+);
+
 -- live orders (Phase B only — table created in A but unused)
 CREATE TABLE live_orders (
   id INTEGER PRIMARY KEY,

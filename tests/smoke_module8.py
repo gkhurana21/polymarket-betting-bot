@@ -432,6 +432,9 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as td:
         tk = _fresh_tracker(Path(td))
+        # Seed the token mapping so the fallback can call get_order_book
+        # with the correct token_id (not the condition_id).
+        tk.record_market_token("m14", "0xYES_m14")
         sig = _seed_whale_signal(tk, market="m14", side="YES",
                                  signal_type="open", price=0.45, size_usd=200.0,
                                  txhash="0xtx_14")
@@ -469,6 +472,9 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as td:
         tk = _fresh_tracker(Path(td))
+        # Seed the token mapping so the fallback reaches the client call
+        # and exercises the CircuitBreakerOpen branch specifically.
+        tk.record_market_token("m15", "0xYES_m15")
         sig = _seed_whale_signal(tk, market="m15", side="YES",
                                  signal_type="open", price=0.5, size_usd=100.0,
                                  txhash="0xtx_15")
@@ -485,6 +491,104 @@ def main() -> int:
         tk.close()
     print("  test 15: CircuitBreakerOpen → stub+null skipped, "
           "copy_whale unaffected  OK")
+
+    # ── 16: on-demand fallback with correct token mapping → stub+null fire ─
+    class _TokenAwareClient:
+        """Returns a valid two-sided book when called with the YES token_id."""
+        def get_order_book(self, token_id: str) -> dict:
+            assert token_id == "0xYES_TOKEN", f"wrong token: {token_id}"
+            return {"bids": [[0.44, 100]], "asks": [[0.46, 100]]}
+
+    with tempfile.TemporaryDirectory() as td:
+        tk = _fresh_tracker(Path(td))
+        # Seed the token mapping the way the scanner would.
+        tk.record_market_token("0xCOND_M16", "0xYES_TOKEN")
+        sig = _seed_whale_signal(tk, market="0xCOND_M16", side="YES",
+                                 signal_type="open", price=0.45, size_usd=200.0,
+                                 txhash="0xtx_16")
+        pt = PaperTrader(tracker=tk, client=_TokenAwareClient(), config=_FULL_CFG)
+        out = pt.consume_signal(sig)
+        strategies = {t.strategy_id for t in out}
+        assert "stub_blend" in strategies, f"stub_blend missing: {strategies}"
+        assert "null_random_side" in strategies, f"null_random_side missing: {strategies}"
+        assert "copy_whale" in strategies
+        assert len(out) == 3
+        # book_snapshot persisted with condition_id as market_id.
+        snap = tk._conn.execute(
+            "SELECT book_json FROM book_snapshots WHERE market_id='0xCOND_M16'"
+        ).fetchone()
+        assert snap is not None, "book_snapshot not written"
+        assert '"bids"' in snap["book_json"]
+        # pending row for whale_side_random_timing.
+        n_pend = tk._conn.execute(
+            "SELECT COUNT(*) FROM pending_paper_trades"
+        ).fetchone()[0]
+        assert n_pend == 1
+        tk.close()
+    print("  test 16: token mapping → correct token_id used, "
+          "stub+null fire        OK")
+
+    # ── 17: unknown condition_id → None gracefully, copy+wt still fire ──
+    class _NeverCalledClient:
+        def get_order_book(self, token_id: str) -> dict:
+            raise AssertionError("get_order_book must not be called for unknown market")
+
+    with tempfile.TemporaryDirectory() as td:
+        tk = _fresh_tracker(Path(td))
+        # No market_token_map entry for this market.
+        sig = _seed_whale_signal(tk, market="0xUNKNOWN_M17", side="YES",
+                                 signal_type="open", price=0.50, size_usd=100.0,
+                                 txhash="0xtx_17")
+        pt = PaperTrader(tracker=tk, client=_NeverCalledClient(), config=_FULL_CFG)
+        out = pt.consume_signal(sig)
+        strategies = {t.strategy_id for t in out}
+        # copy_whale fires regardless of snap.
+        assert "copy_whale" in strategies, strategies
+        # stub+null skip because no token mapping → no snap.
+        assert "stub_blend" not in strategies, strategies
+        assert "null_random_side" not in strategies, strategies
+        # whale_side_random_timing must still fire (it doesn't need snap).
+        n_pend = tk._conn.execute(
+            "SELECT COUNT(*) FROM pending_paper_trades"
+        ).fetchone()[0]
+        assert n_pend == 1, (
+            f"whale_side_random_timing must still produce a pending row "
+            f"even when snap is None; got {n_pend}"
+        )
+        # No book_snapshot written (client never called).
+        n_bs = tk._conn.execute(
+            "SELECT COUNT(*) FROM book_snapshots"
+        ).fetchone()[0]
+        assert n_bs == 0
+        tk.close()
+    print("  test 17: unknown condition_id → stub+null skip, "
+          "copy+wt unaffected    OK")
+
+    # ── 18: token known but circuit breaker open → WARNING branch, copy+wt OK
+    with tempfile.TemporaryDirectory() as td:
+        tk = _fresh_tracker(Path(td))
+        tk.record_market_token("0xCOND_M18", "0xYES_TOKEN_18")
+        sig = _seed_whale_signal(tk, market="0xCOND_M18", side="YES",
+                                 signal_type="open", price=0.50, size_usd=100.0,
+                                 txhash="0xtx_18")
+
+        class _CBOpenClient:
+            def get_order_book(self, token_id: str) -> dict:
+                raise CircuitBreakerOpen("test circuit open")
+
+        pt = PaperTrader(tracker=tk, client=_CBOpenClient(), config=_FULL_CFG)
+        out = pt.consume_signal(sig)
+        strategies = {t.strategy_id for t in out}
+        assert "copy_whale" in strategies
+        assert "stub_blend" not in strategies, strategies
+        assert "null_random_side" not in strategies, strategies
+        n_pend = tk._conn.execute(
+            "SELECT COUNT(*) FROM pending_paper_trades"
+        ).fetchone()[0]
+        assert n_pend == 1
+        tk.close()
+    print("  test 18: circuit breaker open → WARNING branch, "
+          "copy+wt unaffected     OK")
 
     print("\nmodule 8 smoke: OK")
     return 0

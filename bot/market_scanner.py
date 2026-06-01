@@ -148,6 +148,17 @@ class MarketScanner:
                 result.error_details.append(ScanError(mid_id, type(e).__name__, str(e)[:200]))
                 continue
 
+            # Persist the condition_id → yes_token mapping BEFORE building
+            # the snapshot. This way paper_trader can look up the token even
+            # if the snapshot build fails or the market is later filtered out.
+            # Non-fatal: a mapping write failure should not abort the snapshot.
+            try:
+                self._tracker.record_market_token(mid_id, yes_token)
+            except Exception as e:
+                _log.warning(
+                    "scanner: record_market_token failed for %s: %s", mid_id, e
+                )
+
             # Build snapshot — returns None if the book is one-sided.
             ms_snap = self._build_market_snapshot(m, book, ts)
             if ms_snap is None:

@@ -174,6 +174,20 @@ CREATE TABLE IF NOT EXISTS resolved_markets (
   resolved_at_ts INTEGER NOT NULL
 );
 
+-- market_token_map: condition_id → YES token_id lookup. Populated by
+-- MarketScanner on each scan tick for every market that passes book
+-- filters. Consumed by paper_trader's on-demand book fetch fallback so
+-- it calls get_order_book with the correct token_id rather than the
+-- condition_id (which returns 404).
+-- PLAN deviation (Phase A.2.1): original Fix 1 (Phase A.2) passed
+-- condition_id to get_order_book, causing 821 silent 404 failures that
+-- blocked stub_blend and null_random_side entirely.
+CREATE TABLE IF NOT EXISTS market_token_map (
+  condition_id   TEXT PRIMARY KEY,
+  yes_token_id   TEXT NOT NULL,
+  updated_at_ts  INTEGER NOT NULL
+);
+
 -- ─────────────────────────  Phase B tables  ─────────────────────────
 -- Created so the schema is forward-compatible. NO Phase A method writes
 -- to these. bot/executor.py (Phase B) will be the only writer.
@@ -818,6 +832,43 @@ class Tracker:
             (market_id, strategy_id),
         )
         return [dict(r) for r in cur.fetchall()]
+
+    # ──────────────────────────  market token map  ──────────────────────────
+
+    def record_market_token(self, condition_id: str, yes_token_id: str) -> None:
+        """Upsert the YES token_id for a condition_id. Called by MarketScanner
+        after every successful book fetch so paper_trader can look up the
+        correct token before calling get_order_book.
+
+        Not audit-logged: this table is a fast-path reference updated every
+        scan cycle; auditing each upsert would bloat audit.jsonl with noise.
+        """
+        ts = now_ms()
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.execute(
+                    "INSERT INTO market_token_map "
+                    "(condition_id, yes_token_id, updated_at_ts) VALUES (?,?,?) "
+                    "ON CONFLICT(condition_id) DO UPDATE SET "
+                    "  yes_token_id=excluded.yes_token_id, "
+                    "  updated_at_ts=excluded.updated_at_ts",
+                    (condition_id, yes_token_id, ts),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def get_yes_token(self, condition_id: str) -> str | None:
+        """Return the YES token_id for a condition_id, or None if this market
+        has not yet appeared in a scanner tick."""
+        cur = self._conn.execute(
+            "SELECT yes_token_id FROM market_token_map WHERE condition_id=?",
+            (condition_id,),
+        )
+        row = cur.fetchone()
+        return row["yes_token_id"] if row is not None else None
 
     # ─────────────────────────  resolved markets  ─────────────────────────
 

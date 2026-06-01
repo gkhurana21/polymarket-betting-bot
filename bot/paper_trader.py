@@ -301,22 +301,51 @@ class PaperTrader:
     def _fetch_and_cache_book_as_snapshot(
         self, market_id: str
     ) -> MarketSnapshot | None:
-        """On-demand fallback: fetch a live order book, persist it to
-        book_snapshots, and return a synthetic MarketSnapshot carrying the
-        computed mid. Returns None on CircuitBreakerOpen or a one-sided book.
+        """On-demand fallback: look up the YES token_id for this market,
+        fetch a live order book via that token, persist it to book_snapshots,
+        and return a synthetic MarketSnapshot carrying the computed mid.
 
-        PLAN deviation (Phase A.2): added to fix the snapshot coverage gap
-        where stub_blend / null_random_side silently skipped ~99.7% of signals
-        because the periodic 10-min scanner only covered a subset of markets.
+        Returns None (never raises) when:
+        - market_id has no known YES token — not yet in scanner universe
+        - CircuitBreakerOpen — logged at WARNING
+        - any other API/network exception — logged at WARNING
+        - one-sided book (no bid or no ask) — logged at INFO
+
+        PLAN deviation (Phase A.2.1): original Phase A.2 implementation
+        passed condition_id to get_order_book (which requires a token_id),
+        causing 404 errors on every call. Added market_token_map lookup so
+        the correct YES token_id is used. Also broadened exception handling
+        so non-CircuitBreakerOpen failures no longer propagate to _consume_loop
+        and block streams 3 and 4.
         """
         assert self._client is not None
+
+        # Step 1: resolve condition_id → YES token_id from the scanner's map.
+        yes_token_id = self._tracker.get_yes_token(market_id)
+        if yes_token_id is None:
+            # Market not yet seen by scanner — will work on next scan cycle.
+            _log.debug(
+                "paper_trader: no token mapping for %s "
+                "— stub_blend / null_random_side skipped until scanner covers it",
+                market_id[:16],
+            )
+            return None
+
+        # Step 2: fetch the live book with the correct token_id.
         try:
-            book = self._client.get_order_book(market_id)
+            book = self._client.get_order_book(yes_token_id)
         except CircuitBreakerOpen:
             _log.warning(
                 "paper_trader: circuit breaker open fetching live book for %s "
                 "— stub_blend / null_random_side will not fire for this signal",
                 market_id[:16],
+            )
+            return None
+        except Exception as e:
+            _log.warning(
+                "paper_trader: on-demand book fetch failed for %s (%s) "
+                "— stub_blend / null_random_side skipped",
+                market_id[:16], e,
             )
             return None
 
