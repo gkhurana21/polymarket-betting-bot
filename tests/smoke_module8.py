@@ -590,6 +590,49 @@ def main() -> int:
     print("  test 18: circuit breaker open → WARNING branch, "
           "copy+wt unaffected     OK")
 
+    # ── 19: on-demand get_market fallback for markets outside scanner ────
+    # No token map entry; client must be called for get_market + get_order_book.
+    class _FullFallbackClient:
+        def get_market(self, condition_id: str) -> dict:
+            assert condition_id == "0xCOND_M19", f"wrong cond: {condition_id}"
+            return {"tokens": [
+                {"outcome": "No",  "token_id": "0xNO_M19"},
+                {"outcome": "Yes", "token_id": "0xYES_M19"},
+            ]}
+
+        def get_order_book(self, token_id: str) -> dict:
+            assert token_id == "0xYES_M19", f"wrong token: {token_id}"
+            return {"bids": [[0.62, 100]], "asks": [[0.64, 100]]}
+
+    with tempfile.TemporaryDirectory() as td:
+        tk = _fresh_tracker(Path(td))
+        # No token map entry for m19 — forces get_market() fallback path.
+        sig = _seed_whale_signal(tk, market="0xCOND_M19", side="YES",
+                                 signal_type="open", price=0.63, size_usd=300.0,
+                                 txhash="0xtx_19")
+        pt = PaperTrader(tracker=tk, client=_FullFallbackClient(), config=_FULL_CFG)
+        out = pt.consume_signal(sig)
+        strategies = {t.strategy_id for t in out}
+        assert "stub_blend" in strategies, f"stub_blend missing: {strategies}"
+        assert "null_random_side" in strategies, f"null_random_side missing: {strategies}"
+        assert "copy_whale" in strategies
+        # Token must be cached to map after the call.
+        cached = tk.get_yes_token("0xCOND_M19")
+        assert cached == "0xYES_M19", f"expected cached token, got {cached!r}"
+        # Second signal for same market must NOT call get_market again.
+        class _MapOnlyClient(_FullFallbackClient):
+            def get_market(self, condition_id: str) -> dict:
+                raise AssertionError("get_market must not be called — token is cached")
+        sig2 = _seed_whale_signal(tk, market="0xCOND_M19", side="NO",
+                                  signal_type="add", price=0.37, size_usd=100.0,
+                                  txhash="0xtx_19b")
+        pt2 = PaperTrader(tracker=tk, client=_MapOnlyClient(), config=_FULL_CFG)
+        out2 = pt2.consume_signal(sig2)
+        assert "stub_blend" in {t.strategy_id for t in out2}
+        tk.close()
+    print("  test 19: get_market fallback fires stub+null, token cached, "
+          "2nd signal uses map  OK")
+
     print("\nmodule 8 smoke: OK")
     return 0
 

@@ -320,15 +320,14 @@ class PaperTrader:
         """
         assert self._client is not None
 
-        # Step 1: resolve condition_id → YES token_id from the scanner's map.
+        # Step 1: resolve condition_id → YES token_id.
+        # Primary source: market_token_map (populated by scanner each tick).
+        # Fallback: on-demand get_market() call, result cached to map so
+        # subsequent signals for the same market skip the extra API call.
         yes_token_id = self._tracker.get_yes_token(market_id)
         if yes_token_id is None:
-            # Market not yet seen by scanner — will work on next scan cycle.
-            _log.debug(
-                "paper_trader: no token mapping for %s "
-                "— stub_blend / null_random_side skipped until scanner covers it",
-                market_id[:16],
-            )
+            yes_token_id = self._lookup_and_cache_yes_token(market_id)
+        if yes_token_id is None:
             return None
 
         # Step 2: fetch the live book with the correct token_id.
@@ -367,6 +366,56 @@ class PaperTrader:
             return None
 
         return MarketSnapshot(market_id=market_id, ts=ts, mid=mid)
+
+    def _lookup_and_cache_yes_token(self, market_id: str) -> str | None:
+        """On-demand market metadata fetch to resolve YES token_id for
+        markets not yet in market_token_map (i.e. outside scanner universe).
+        Writes result to map on success so future signals use the cache.
+        Returns None on any failure — never raises.
+
+        PLAN deviation (Phase A.2.2): scanner-only population of
+        market_token_map only covered ~500 liquid markets; whales trade
+        a much wider universe (974 signals, 0 map hits in 8h post-A.2.1).
+        This call covers the gap at cost of one extra API call per new market.
+        """
+        assert self._client is not None
+        try:
+            market = self._client.get_market(market_id)
+        except CircuitBreakerOpen:
+            _log.warning(
+                "paper_trader: circuit breaker open on get_market for %s",
+                market_id[:16],
+            )
+            return None
+        except Exception as e:
+            _log.warning(
+                "paper_trader: get_market failed for %s (%s)",
+                market_id[:16], e,
+            )
+            return None
+
+        # Extract YES token_id — same logic as MarketScanner._yes_token.
+        yes_token_id: str | None = None
+        for t in (market.get("tokens") or []):
+            if (t.get("outcome") or "").strip().lower() == "yes":
+                yes_token_id = t.get("token_id")
+                break
+
+        if yes_token_id is None:
+            _log.debug(
+                "paper_trader: no YES token in market data for %s", market_id[:16]
+            )
+            return None
+
+        # Cache to map — failures here are non-fatal; we still have the token.
+        try:
+            self._tracker.record_market_token(market_id, yes_token_id)
+        except Exception as e:
+            _log.warning(
+                "paper_trader: failed to cache token for %s: %s", market_id[:16], e
+            )
+
+        return yes_token_id
 
     def _build_whale_side_random_timing(
         self, signal: WhaleSignal
