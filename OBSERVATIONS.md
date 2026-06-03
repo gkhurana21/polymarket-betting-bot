@@ -23,3 +23,36 @@ one-time historical replay). DO NOT fix mid-run unless it's actively corrupting
 the dataset. First determine: is this replay-only noise that disappears at
 steady state, or is it firing on live signals too? Only then decide whether a
 restart + fix is warranted.
+
+---
+
+## Phase A.3 deferral — 2026-06-03
+
+### BUG: Auto-discovery never re-runs after startup
+
+`_load_whale_universe()` in `main.py` is called once in `__init__` and never
+again. The whale universe is frozen at daemon startup time. PLAN.md §6 specifies
+`whale_discovery: 86400` as a periodic interval but this was never implemented
+in `run_forever` — no `last_discovery` timer, no periodic leaderboard refresh.
+
+Consequence: any wallet that rises through the Polymarket leaderboard after a
+daemon startup is permanently invisible until the next restart.
+
+Discovery: sovereign2013 (`0xee613b3fc183ee44f9da9c05f53e2da107e3debf`, $3.6M
+all-time profit, leaderboard rank 28) was not in the initial tracked universe.
+Manually added via `python main.py add-whale` on 2026-06-03 — written to
+`data/whales_manual.json`, will auto-activate on next daemon restart.
+
+### Decision: Do NOT restart to activate sovereign2013 mid-extension
+
+Marginal benefit (~2-4% dataset contribution from one new whale) does not
+justify disrupting 36+ hours of clean in-memory runtime state. Sovereign2013
+will join the universe on whatever restart next legitimately occurs (Phase A.3
+fix, Phase B prep, or any other planned restart).
+
+### ACTION (Phase A.3 — next planned restart boundary)
+
+Fix `run_forever` to add a `last_discovery` timer and re-run
+`_load_whale_universe` on the `whale_discovery` interval, merging new wallets
+into `_whale_universe` without dropping existing tracked ones. Safe to implement
+between extension boundaries. Do NOT fix during active data collection.

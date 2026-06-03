@@ -807,6 +807,8 @@ def validate_calibration_readiness(tracker) -> ReadinessReport: ...
 
 After each Phase A step: I show the file, list exports/deps, write a smoke test you can run, then wait.
 
+**Phase A.3 deferred:** Periodic whale rediscovery not implemented — universe is frozen at daemon startup. `whale_discovery: 86400` interval specified in §6 but `run_forever` has no `last_discovery` timer. Fix at next planned restart (between extension boundaries or Phase B prep). See OBSERVATIONS.md for full context.
+
 ---
 
 ## 15. CLI reference (Phase A)
