@@ -48,8 +48,8 @@ market_filters:
   min_volume_24h_usd: 10000
   min_liquidity_usd: 5000
   max_spread_bps: 200
-  blacklist_categories: ["crypto-prices"]
-  blacklist_keywords: ["BTC price", "ETH price", "SOL price"]
+  blacklist_categories: []
+  blacklist_keywords: []
   whitelist_categories: []
 
 book_snapshot:
@@ -120,10 +120,15 @@ whale_tracker:
   max_pages_per_wallet: 20                   # hard cap (10k trades / wallet / poll)
   latency_window: 1000                       # rolling latency samples for p50/p95/p99
   latency_log_every_polls: 5                 # log percentiles every N poll cycles
-  max_signal_age_ms: 60000                   # signals older than this → recorded
+  max_signal_age_ms: 600000                  # signals older than this → recorded
                                              # to DB but NOT enqueued (prevents
                                              # cold-start floods of stale trades
-                                             # from polluting paper_trader)
+                                             # from polluting paper_trader).
+                                             # PLAN deviation (Phase A.3 prep):
+                                             # increased 60s→600s to match actual
+                                             # whale_poll detection latency (p50≈310s,
+                                             # p95≈500s); prior 60s was silently
+                                             # dropping ~99% of live signals.
 
 paper_trader:
   snapshot_max_staleness_seconds: 900        # market_snapshot must be ≤ this old
