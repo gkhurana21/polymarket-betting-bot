@@ -271,6 +271,26 @@ class Tracker:
                 self._conn.execute(
                     "ALTER TABLE market_token_map ADD COLUMN no_token_id TEXT"
                 )
+            # Phase B migration: add resolution columns to live_orders so the
+            # daily-drawdown guard can measure realised P&L. Written by the
+            # (future) live-order settlement reconciler; until then they stay
+            # NULL and the drawdown guard correctly reports $0 realised loss.
+            lo_cols = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(live_orders)")
+            }
+            if lo_cols and "resolved_outcome" not in lo_cols:
+                self._conn.execute(
+                    "ALTER TABLE live_orders ADD COLUMN resolved_outcome TEXT"
+                )
+            if lo_cols and "resolved_at_ts" not in lo_cols:
+                self._conn.execute(
+                    "ALTER TABLE live_orders ADD COLUMN resolved_at_ts INTEGER"
+                )
+            if lo_cols and "pnl_usd" not in lo_cols:
+                self._conn.execute(
+                    "ALTER TABLE live_orders ADD COLUMN pnl_usd REAL"
+                )
 
     # ─────────────────────────────  audit  ─────────────────────────────
 
@@ -1082,31 +1102,42 @@ class Tracker:
         )
         return cur.fetchone() is not None
 
+    # An order holds a position slot while it is live ('open') or, in a
+    # dry-run, while it would be live ('dry_run'). Both count toward the
+    # open-position and duplicate-market guards so a dry-run faithfully
+    # mirrors live throttling. Resolved/filled/cancelled orders free the slot.
+    _POSITION_STATUSES = ("open", "dry_run")
+
     def count_open_orders(self) -> int:
-        """Total live_orders rows with status='open'."""
+        """Live (or would-be-live) orders holding a position slot."""
         cur = self._conn.execute(
-            "SELECT COUNT(*) FROM live_orders WHERE status='open'"
+            "SELECT COUNT(*) FROM live_orders WHERE status IN ('open','dry_run')"
         )
         return int(cur.fetchone()[0])
 
     def count_open_orders_for_market(self, market_id: str) -> int:
-        """Open orders for a specific market (duplicate-market block)."""
+        """Position-holding orders for a specific market (duplicate-market block)."""
         cur = self._conn.execute(
-            "SELECT COUNT(*) FROM live_orders WHERE market_id=? AND status='open'",
+            "SELECT COUNT(*) FROM live_orders "
+            "WHERE market_id=? AND status IN ('open','dry_run')",
             (market_id,),
         )
         return int(cur.fetchone()[0])
 
     def daily_realized_loss_usd(self, since_ms: int) -> float:
-        """Total USD committed in live_orders placed since since_ms.
+        """Realised loss (USD, positive number) from live orders that RESOLVED
+        since since_ms — i.e. the daily-drawdown stop-loss metric.
 
-        Conservative: counts all placed orders (open + filled + dry_run) as
-        "at risk" for the daily drawdown ceiling. Filled wins will offset this
-        at resolution time, but we can't know that until the market resolves.
+        Only resolved orders with negative pnl_usd contribute; deploying
+        capital is NOT a loss (that is bounded separately by
+        max_open_positions). pnl_usd is written by the live-order settlement
+        reconciler at resolution; until that exists every live order has
+        pnl_usd = NULL and this correctly returns 0.0 (no realised drawdown
+        before anything resolves).
         """
         cur = self._conn.execute(
-            "SELECT COALESCE(SUM(size_usd), 0.0) FROM live_orders "
-            "WHERE placed_at_ts >= ? AND status NOT IN ('cancelled', 'error')",
+            "SELECT COALESCE(SUM(-pnl_usd), 0.0) FROM live_orders "
+            "WHERE resolved_at_ts >= ? AND pnl_usd IS NOT NULL AND pnl_usd < 0",
             (since_ms,),
         )
         return float(cur.fetchone()[0])

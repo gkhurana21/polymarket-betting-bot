@@ -18,7 +18,6 @@ PRIVATE_KEY must be set in the environment for live mode. In dry-run mode
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 import time
@@ -26,10 +25,11 @@ from queue import Empty, Queue
 from typing import Any
 
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType
+from py_clob_client.clob_types import ApiCreds, OrderArgs
 from py_clob_client.constants import POLYGON
+from py_clob_client.order_builder.constants import BUY
 
-from bot.client import ClobReadOnlyClient, _is_retriable
+from bot.client import ClobReadOnlyClient
 from bot.models import BetIntent, LiveOrder, WhaleSignal
 from bot.risk import RiskGate, RiskVeto
 from bot.strategy import Strategy
@@ -212,9 +212,10 @@ class LiveTrader:
         placed_at = now_ms()
 
         if self._dry_run:
+            shares = round(intent.size_usd / intent.limit_price, 2) if intent.limit_price else 0.0
             _log.info(
-                "live_trader DRY-RUN: would place %s %s $%.2f @ %.4f market=%s",
-                intent.side, intent.strategy_id, intent.size_usd,
+                "live_trader DRY-RUN: would BUY %s token $%.2f = %.2f shares @ %.4f market=%s",
+                intent.side, intent.size_usd, shares,
                 intent.limit_price, intent.market_id[:16],
             )
             order = LiveOrder(
@@ -239,12 +240,18 @@ class LiveTrader:
             )
             return
 
+        # Polymarket order semantics:
+        #   - token_id selects the outcome (YES token vs NO token); intent.token_id
+        #     already resolved the correct one in _consume.
+        #   - side is BUY/SELL, NOT YES/NO. We always BUY the chosen outcome token
+        #     (copying a whale's directional bet = buying that side's shares).
+        #   - size is the number of SHARES, not USD. shares = usd / price.
+        shares = round(intent.size_usd / intent.limit_price, 2)
         order_args = OrderArgs(
             token_id=intent.token_id,
             price=intent.limit_price,
-            size=intent.size_usd,
-            side=intent.side,
-            order_type=OrderType.GTC,
+            size=shares,
+            side=BUY,
         )
 
         clob_order_id: str | None = None
