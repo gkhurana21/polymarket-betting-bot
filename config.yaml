@@ -175,13 +175,20 @@ reconnect:
 #  Calibration will overwrite tunable values here in data/calibration.yaml.
 # ──────────────────────────────────────────────────────────────────────────
 strategy:                                    # [Phase B]
+  # Sizing mirrors the VALIDATED copy_whale paper stream (Phase A, 58.9%,
+  # BUILD_B_FULL). Proportional to the whale's bet, clamped. Do NOT switch to
+  # Kelly-on-trust: it was never validated and max-sizes deep-longshot bets.
   bankroll_usd: 10000                        # CONFIRM before going live — user said "10"
                                              # (interpreted as $10,000; change to actual
                                              # funded amount before setting dry_run: false)
-  min_edge_pct: 0.03                         # whale win_rate must exceed market price by ≥3pp
+  proportional_scale: 0.01                   # bet ≈ 1% of whale's size (same as paper stream)
+  min_bet_usd: 5                             # clamp floor
+  max_bet_usd: 500                           # clamp ceiling
+  max_bet_pct_bankroll: 0.05                 # hard cap: single bet ≤ 5% of bankroll
   min_whale_winrate: 0.50                    # exclude whales below 50% (LEEEROYJENKINS=41.7%)
-  max_bet_pct_bankroll: 0.05                 # single bet cap: 5% of bankroll
-  kelly_fraction: 0.25                       # ¼-Kelly; swisstony=4.45%/trade at $10k
+  price_band: null                           # optional [lo, hi] to skip longshots/
+                                             # near-certainties; null = copy all prices
+                                             # (faithful to validated model)
   blend:
     alpha_max: 0.6
     beta_max: 0.5
