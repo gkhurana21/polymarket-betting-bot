@@ -262,6 +262,15 @@ class Tracker:
                     "ALTER TABLE whale_trust ADD COLUMN "
                     "candidate_blacklist INTEGER NOT NULL DEFAULT 0"
                 )
+            # Phase B migration: add no_token_id to market_token_map.
+            mtm_cols = {
+                row[1]
+                for row in self._conn.execute("PRAGMA table_info(market_token_map)")
+            }
+            if mtm_cols and "no_token_id" not in mtm_cols:
+                self._conn.execute(
+                    "ALTER TABLE market_token_map ADD COLUMN no_token_id TEXT"
+                )
 
     # ─────────────────────────────  audit  ─────────────────────────────
 
@@ -835,10 +844,10 @@ class Tracker:
 
     # ──────────────────────────  market token map  ──────────────────────────
 
-    def record_market_token(self, condition_id: str, yes_token_id: str) -> None:
-        """Upsert the YES token_id for a condition_id. Called by MarketScanner
-        after every successful book fetch so paper_trader can look up the
-        correct token before calling get_order_book.
+    def record_market_token(
+        self, condition_id: str, yes_token_id: str, no_token_id: str | None = None
+    ) -> None:
+        """Upsert YES (and optionally NO) token_id for a condition_id.
 
         Not audit-logged: this table is a fast-path reference updated every
         scan cycle; auditing each upsert would bloat audit.jsonl with noise.
@@ -849,11 +858,12 @@ class Tracker:
             try:
                 self._conn.execute(
                     "INSERT INTO market_token_map "
-                    "(condition_id, yes_token_id, updated_at_ts) VALUES (?,?,?) "
+                    "(condition_id, yes_token_id, no_token_id, updated_at_ts) VALUES (?,?,?,?) "
                     "ON CONFLICT(condition_id) DO UPDATE SET "
                     "  yes_token_id=excluded.yes_token_id, "
+                    "  no_token_id=COALESCE(excluded.no_token_id, no_token_id), "
                     "  updated_at_ts=excluded.updated_at_ts",
-                    (condition_id, yes_token_id, ts),
+                    (condition_id, yes_token_id, no_token_id, ts),
                 )
                 self._conn.execute("COMMIT")
             except Exception:
@@ -861,14 +871,28 @@ class Tracker:
                 raise
 
     def get_yes_token(self, condition_id: str) -> str | None:
-        """Return the YES token_id for a condition_id, or None if this market
-        has not yet appeared in a scanner tick."""
+        """Return the YES token_id for a condition_id, or None if not yet scanned."""
         cur = self._conn.execute(
             "SELECT yes_token_id FROM market_token_map WHERE condition_id=?",
             (condition_id,),
         )
         row = cur.fetchone()
         return row["yes_token_id"] if row is not None else None
+
+    def get_yes_token_id(self, condition_id: str) -> str | None:
+        """Alias for get_yes_token; preferred name in Phase B executor."""
+        return self.get_yes_token(condition_id)
+
+    def get_no_token_id(self, condition_id: str) -> str | None:
+        """Return the NO token_id for a condition_id, or None if not yet scanned."""
+        cur = self._conn.execute(
+            "SELECT no_token_id FROM market_token_map WHERE condition_id=?",
+            (condition_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return row["no_token_id"]
 
     # ─────────────────────────  resolved markets  ─────────────────────────
 
@@ -1007,6 +1031,107 @@ class Tracker:
         if row["lo"] is None:
             return 0.0
         return (row["hi"] - row["lo"]) / 1000.0 / 86400.0
+
+    # ─────────────────────────  Phase B: live_orders  ─────────────────────────
+
+    def insert_live_order(self, order: "LiveOrder") -> int:
+        """Insert a new live_orders row. Returns the row id."""
+        from bot.models import LiveOrder  # local import avoids circular at module level
+        ts = now_ms()
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
+                cur = self._conn.execute(
+                    "INSERT INTO live_orders "
+                    "(clob_order_id, market_id, side, limit_price, size_usd, status, "
+                    " placed_at_ts, filled_at_ts, fill_price, risk_token_hash, intent_json) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        order.clob_order_id,
+                        order.market_id,
+                        order.side,
+                        order.limit_price,
+                        order.size_usd,
+                        order.status,
+                        order.placed_at_ts,
+                        order.filled_at_ts,
+                        order.fill_price,
+                        order.risk_token_hash,
+                        order.intent_json,
+                    ),
+                )
+                row_id = cur.lastrowid
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        self._audit_write("live_order_placed", {
+            "clob_order_id": order.clob_order_id,
+            "market_id": order.market_id,
+            "side": order.side,
+            "size_usd": order.size_usd,
+            "status": order.status,
+        })
+        return row_id
+
+    def live_order_exists(self, risk_token_hash: str) -> bool:
+        """True if any live_order row with this hash already exists."""
+        cur = self._conn.execute(
+            "SELECT 1 FROM live_orders WHERE risk_token_hash=? LIMIT 1",
+            (risk_token_hash,),
+        )
+        return cur.fetchone() is not None
+
+    def count_open_orders(self) -> int:
+        """Total live_orders rows with status='open'."""
+        cur = self._conn.execute(
+            "SELECT COUNT(*) FROM live_orders WHERE status='open'"
+        )
+        return int(cur.fetchone()[0])
+
+    def count_open_orders_for_market(self, market_id: str) -> int:
+        """Open orders for a specific market (duplicate-market block)."""
+        cur = self._conn.execute(
+            "SELECT COUNT(*) FROM live_orders WHERE market_id=? AND status='open'",
+            (market_id,),
+        )
+        return int(cur.fetchone()[0])
+
+    def daily_realized_loss_usd(self, since_ms: int) -> float:
+        """Total USD committed in live_orders placed since since_ms.
+
+        Conservative: counts all placed orders (open + filled + dry_run) as
+        "at risk" for the daily drawdown ceiling. Filled wins will offset this
+        at resolution time, but we can't know that until the market resolves.
+        """
+        cur = self._conn.execute(
+            "SELECT COALESCE(SUM(size_usd), 0.0) FROM live_orders "
+            "WHERE placed_at_ts >= ? AND status NOT IN ('cancelled', 'error')",
+            (since_ms,),
+        )
+        return float(cur.fetchone()[0])
+
+    def update_live_order_status(
+        self,
+        clob_order_id: str,
+        status: str,
+        *,
+        fill_price: float | None = None,
+        filled_at_ts: int | None = None,
+    ) -> None:
+        """Update status (and optionally fill details) on a live_order row."""
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.execute(
+                    "UPDATE live_orders SET status=?, fill_price=?, filled_at_ts=? "
+                    "WHERE clob_order_id=?",
+                    (status, fill_price, filled_at_ts, clob_order_id),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     # ─────────────────────────  shutdown  ─────────────────────────
 

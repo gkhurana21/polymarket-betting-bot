@@ -497,6 +497,125 @@ def cmd_serve(config: dict[str, Any]) -> None:
     _ORCHESTRATOR.run_forever()
 
 
+def cmd_run(config: dict[str, Any]) -> None:
+    """Phase B live-trading orchestrator.
+
+    Runs alongside the full Phase A stack (paper streams, resolution poller)
+    so both live and paper trades are recorded in parallel for ongoing
+    calibration. LiveTrader reads from the same whale_tracker.events queue.
+
+    Guards:
+      1. Readiness gate must be all-green.
+      2. Decision matrix must be BUILD_B_RELAXED or BUILD_B_FULL.
+      3. PRIVATE_KEY must be set (unless dry_run: true — then paper mode).
+    """
+    from bot.executor import ClobSigningClient, LiveTrader
+    from bot.calibration import evaluate_decision_matrix, validate_calibration_readiness
+
+    db_path, audit_path, state_path = _paths(config)
+    tracker = Tracker(db_path=db_path, audit_log_path=audit_path)
+
+    rep = validate_calibration_readiness(tracker, config)
+    if not rep.all_passed:
+        _console.print(f"[red]refused:[/] readiness gate not met — {rep.summary}")
+        tracker.close()
+        sys.exit(1)
+
+    verdict = evaluate_decision_matrix(tracker, config)
+    if verdict.label not in ("BUILD_B_RELAXED", "BUILD_B_FULL"):
+        _console.print(
+            f"[red]refused:[/] decision matrix verdict={verdict.label!r}. "
+            "Need BUILD_B_RELAXED or BUILD_B_FULL to proceed."
+        )
+        tracker.close()
+        sys.exit(1)
+
+    dry_run = bool(config.get("dry_run", True))
+    private_key = os.environ.get("PRIVATE_KEY", "").strip()
+
+    if not dry_run and not private_key:
+        _console.print(
+            "[red]refused:[/] dry_run=false but PRIVATE_KEY is not set. "
+            "Set PRIVATE_KEY in .env or the environment, or set dry_run: true "
+            "in config.yaml for a paper-only run of Phase B logic."
+        )
+        tracker.close()
+        sys.exit(1)
+
+    if dry_run:
+        client = _build_client(config)
+        _console.print("[yellow]Phase B dry-run[/] — live_orders will be written with status=dry_run")
+    else:
+        rc = config.get("reconnect") or {}
+        client = ClobSigningClient(
+            retry_max_attempts=int(rc.get("retry_max_attempts", 5)),
+            retry_initial_backoff_seconds=float(rc.get("initial_backoff_seconds", 2)),
+            retry_max_backoff_seconds=float(rc.get("max_backoff_seconds", 300)),
+            retry_multiplier=float(rc.get("multiplier", 2.0)),
+            cb_fail_threshold=int(rc.get("circuit_breaker_consecutive_fails", 5)),
+            cb_reset_seconds=float(rc.get("max_backoff_seconds", 300)),
+        )
+
+    tracker_b = tracker
+
+    universe = _load_whale_universe(client, config)
+    whale_tracker = PollingWhaleTracker(client, tracker_b, config, whale_universe=universe)
+    _apply_state_file(whale_tracker, state_path)
+
+    market_scanner = MarketScanner(client, tracker_b, config)
+    paper_trader = PaperTrader(tracker_b, client, config, signal_queue=whale_tracker.events)
+    live_trader = LiveTrader(tracker_b, client, config, signal_queue=whale_tracker.events)
+    resolution_poller = ResolutionPoller(
+        client, tracker_b, config, whale_perf=WhalePerf(tracker_b, config)
+    )
+
+    intervals = config.get("intervals_seconds") or {}
+    scan_interval = float(intervals.get("market_scan", 600))
+    res_interval = float(intervals.get("resolution_poll", 1800))
+
+    if not client.health_check():
+        _console.print("[red]CLOB health_check failed — refusing to start[/]")
+        tracker_b.close()
+        sys.exit(1)
+
+    _console.print(
+        f"[green]Phase B starting[/] (verdict={verdict.label}, dry_run={dry_run}) — "
+        f"{len(universe)} whales"
+    )
+
+    whale_tracker.start()
+    paper_trader.start()
+    live_trader.start()
+
+    last_scan = 0.0
+    last_res = 0.0
+
+    try:
+        while not _SHUTDOWN.is_set():
+            now = time.monotonic()
+            if now - last_scan >= scan_interval:
+                try:
+                    market_scanner.scan_once()
+                    paper_trader.sweep_pending()
+                except Exception as e:
+                    _log.error("Phase B scan/sweep tick failed: %s", e, exc_info=True)
+                last_scan = now
+            if now - last_res >= res_interval:
+                try:
+                    resolution_poller.poll_once()
+                except Exception as e:
+                    _log.error("Phase B resolution tick failed: %s", e, exc_info=True)
+                last_res = now
+            _SHUTDOWN.wait(1.0)
+    finally:
+        whale_tracker.stop()
+        paper_trader.stop()
+        live_trader.stop()
+        _save_state_file(whale_tracker, state_path)
+        tracker_b.close()
+        _console.print("[green]Phase B shutdown complete[/]")
+
+
 # ───────────────────────────  argparse  ───────────────────────────
 
 
@@ -541,14 +660,19 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _build_parser().parse_args(argv)
 
-    if args.command == "run":
-        _console.print(
-            "[red]refused:[/] `run` is Phase B only. Complete readiness + decision "
-            "matrix first. See PLAN.md §0."
-        )
-        return 1
-
     config = load_config(args.config)
+
+    if args.command == "run":
+        # Phase B: skip the Phase A dry_run/phase guard — `run` has its own guards
+        # inside cmd_run (readiness gate + decision matrix + PRIVATE_KEY check).
+        signal.signal(signal.SIGINT, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
+        log_level = (config.get("bot") or {}).get("log_level", "INFO")
+        os.environ.setdefault("LOG_LEVEL", log_level)
+        _log.info("polymarket-bot %s phase=B command=run", bot.__version__)
+        cmd_run(config)
+        return 0
+
     _assert_phase_a_safe(config)
 
     signal.signal(signal.SIGINT, _handle_signal)
@@ -572,6 +696,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "backtest": lambda: cmd_backtest(config),
         "serve": lambda: cmd_serve(config),
+        "run": lambda: cmd_run(config),
     }
     handlers[args.command]()
     return 0

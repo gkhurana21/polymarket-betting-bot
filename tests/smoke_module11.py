@@ -153,15 +153,19 @@ def main_smoke() -> int:
                 orch.tracker.close()
         print("  Orchestrator wiring   OK")
 
-    # 9: run command
+    # 9: run command — Phase B gates (readiness not met on empty DB → sys.exit(1))
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        f.write("dry_run: true\nphase: A\nbot:\n  data_dir: ./data\n")
+        f.write("dry_run: true\nphase: A\nbot:\n  data_dir: /tmp/_smoke11_run\n")
         cfg_path = f.name
     try:
-        assert main.main(["--config", cfg_path, "run"]) == 1
+        try:
+            rc = main.main(["--config", cfg_path, "run"])
+            assert rc == 1, f"expected 1, got {rc}"
+        except SystemExit as exc:
+            assert exc.code == 1, f"expected SystemExit(1), got SystemExit({exc.code})"
     finally:
         Path(cfg_path).unlink(missing_ok=True)
-    print("  run command refused (Phase B)   OK")
+    print("  run command gates readiness (exits 1 on empty DB)   OK")
 
     # 10: parser knows serve
     p = main._build_parser()

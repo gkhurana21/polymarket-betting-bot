@@ -132,6 +132,53 @@ class PendingPaperTrade(DataClassJsonMixin):
 
 
 @dataclass(frozen=True)
+class BetIntent(DataClassJsonMixin):
+    """A sizing decision produced by strategy.py before risk gating.
+
+    side ∈ {"YES", "NO"}
+    strategy_id: always "live_copy_whale" in Phase B
+    token_id: the YES/NO token to buy (resolved from market_token_map)
+    limit_price: mid-price at signal time (executor may add offset_bps)
+    size_usd: Kelly-sized notional in USD
+    risk_token_hash: SHA-256 of (market_id, side, whale_address, whale_fill_ts)
+      used to deduplicate across crashes and detect duplicate market blocks
+    """
+    whale_address: str
+    market_id: str
+    token_id: str
+    side: str
+    strategy_id: str
+    limit_price: float
+    size_usd: float
+    risk_token_hash: str
+    whale_fill_ts: int
+    intent_json: str          # full JSON blob for audit / live_orders.intent_json
+    triggering_signal_id: int
+    created_at_ts: int
+
+
+@dataclass
+class LiveOrder(DataClassJsonMixin):
+    """One live CLOB order row, mirroring the live_orders DB table.
+
+    status ∈ {"open", "filled", "cancelled", "error"}
+    Mutable: status / filled_at_ts / fill_price updated by executor on callback.
+    """
+    clob_order_id: str
+    market_id: str
+    side: str
+    limit_price: float
+    size_usd: float
+    status: str
+    placed_at_ts: int
+    risk_token_hash: str
+    intent_json: str
+    filled_at_ts: int | None = None
+    fill_price: float | None = None
+    id: int | None = None
+
+
+@dataclass(frozen=True)
 class ReadinessCheck(DataClassJsonMixin):
     """One row of the calibration readiness gate.
 

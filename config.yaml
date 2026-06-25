@@ -175,9 +175,13 @@ reconnect:
 #  Calibration will overwrite tunable values here in data/calibration.yaml.
 # ──────────────────────────────────────────────────────────────────────────
 strategy:                                    # [Phase B]
-  min_edge_pct: 0.03
-  max_bet_pct_bankroll: 0.05
-  kelly_fraction: 0.25
+  bankroll_usd: 10000                        # CONFIRM before going live — user said "10"
+                                             # (interpreted as $10,000; change to actual
+                                             # funded amount before setting dry_run: false)
+  min_edge_pct: 0.03                         # whale win_rate must exceed market price by ≥3pp
+  min_whale_winrate: 0.50                    # exclude whales below 50% (LEEEROYJENKINS=41.7%)
+  max_bet_pct_bankroll: 0.05                 # single bet cap: 5% of bankroll
+  kelly_fraction: 0.25                       # ¼-Kelly; swisstony=4.45%/trade at $10k
   blend:
     alpha_max: 0.6
     beta_max: 0.5

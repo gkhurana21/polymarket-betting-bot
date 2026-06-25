@@ -153,7 +153,8 @@ class MarketScanner:
             # if the snapshot build fails or the market is later filtered out.
             # Non-fatal: a mapping write failure should not abort the snapshot.
             try:
-                self._tracker.record_market_token(mid_id, yes_token)
+                no_token = self._no_token(m)
+                self._tracker.record_market_token(mid_id, yes_token, no_token)
             except Exception as e:
                 _log.warning(
                     "scanner: record_market_token failed for %s: %s", mid_id, e
@@ -230,6 +231,13 @@ class MarketScanner:
     def _yes_token(m: dict[str, Any]) -> str | None:
         for t in (m.get("tokens") or []):
             if (t.get("outcome") or "").strip().lower() == "yes":
+                return t.get("token_id")
+        return None
+
+    @staticmethod
+    def _no_token(m: dict[str, Any]) -> str | None:
+        for t in (m.get("tokens") or []):
+            if (t.get("outcome") or "").strip().lower() == "no":
                 return t.get("token_id")
         return None
 
