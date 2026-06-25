@@ -186,6 +186,9 @@ strategy:                                    # [Phase B]
   max_bet_usd: 500                           # clamp ceiling
   max_bet_pct_bankroll: 0.05                 # hard cap: single bet ≤ 5% of bankroll
   min_whale_winrate: 0.50                    # exclude whales below 50% (LEEEROYJENKINS=41.7%)
+  acts_on_signal_types: [open]               # ONLY copy fresh "open" positions — the
+                                             # validated edge (+38% OOS, mid-band+open).
+                                             # "add" signals were ~flat (+1.6% OOS).
   price_band: [0.30, 0.60]                   # ONLY copy bets in this entry-price band.
                                              # Data-justified: copying ALL prices is a net
                                              # loser (-2.9% ROI out-of-sample); the mid band

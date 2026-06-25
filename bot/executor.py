@@ -136,6 +136,14 @@ class LiveTrader:
         self._order_type = exec_cfg.get("order_type", "GTC")
         self._retry_attempts = int(exec_cfg.get("retry_attempts", 3))
 
+        # Which whale signal types this strategy acts on. The validated edge
+        # (mid-band + "open" signals, +38% out-of-sample) is open-only;
+        # "add" signals were ~flat (+1.6% OOS). Config-overridable.
+        strat_cfg = config.get("strategy") or {}
+        self._acts_on: tuple[str, ...] = tuple(
+            strat_cfg.get("acts_on_signal_types", ["open"])
+        )
+
     # ── lifecycle ──────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -166,7 +174,7 @@ class LiveTrader:
                 _log.error("live_trader consume error: %s", exc, exc_info=True)
 
     def _consume(self, signal: WhaleSignal) -> None:
-        if signal.signal_type not in ("open", "add"):
+        if signal.signal_type not in self._acts_on:
             return
 
         # Resolve YES token_id for this market.
