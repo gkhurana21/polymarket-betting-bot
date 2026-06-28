@@ -76,6 +76,7 @@ class ResolutionResult(DataClassJsonMixin):
     markets_checked: int = 0
     markets_resolved_this_tick: int = 0
     paper_trades_settled: int = 0
+    live_orders_settled: int = 0
     trust_updates_applied: int = 0
     errors: int = 0
     error_details: list[ResolutionError] = field(default_factory=list)
@@ -104,7 +105,12 @@ class ResolutionPoller:
         market never crashes the loop; halts the rest of the tick if the
         circuit breaker trips during a get_market call."""
         result = ResolutionResult()
-        market_ids = self._tracker.get_unresolved_paper_trade_market_ids()
+        # Union of markets with unresolved paper trades AND unresolved live
+        # orders, so live orders settle on the same tick as paper trades.
+        market_ids = list(dict.fromkeys(
+            self._tracker.get_unresolved_paper_trade_market_ids()
+            + self._tracker.get_unresolved_live_order_market_ids()
+        ))
         result.markets_checked = len(market_ids)
 
         for mid in market_ids:
@@ -114,6 +120,7 @@ class ResolutionPoller:
                 outcome, ts = cached
                 try:
                     n = self._settle_market(mid, outcome, ts)
+                    ln = self._settle_live_orders(mid, outcome, ts)
                     result.trust_updates_applied += self._run_whale_perf(mid, outcome)
                 except Exception as e:
                     _log.error("res-poller: cache-path settle %s failed: %s", mid, e)
@@ -123,6 +130,7 @@ class ResolutionPoller:
                     )
                     continue
                 result.paper_trades_settled += n
+                result.live_orders_settled += ln
                 continue
 
             # 2. Live fetch.
@@ -155,6 +163,7 @@ class ResolutionPoller:
             try:
                 self._tracker.record_resolved_market(mid, outcome, ts)
                 n = self._settle_market(mid, outcome, ts)
+                ln = self._settle_live_orders(mid, outcome, ts)
                 result.trust_updates_applied += self._run_whale_perf(mid, outcome)
             except Exception as e:
                 _log.error("res-poller: settle %s (outcome=%s) failed: %s", mid, outcome, e)
@@ -165,6 +174,7 @@ class ResolutionPoller:
                 continue
             result.markets_resolved_this_tick += 1
             result.paper_trades_settled += n
+            result.live_orders_settled += ln
             _log.info(
                 "res-poller: %s resolved=%s settled %d paper trades", mid, outcome, n
             )
@@ -272,5 +282,41 @@ class ResolutionPoller:
             except Exception as e:
                 _log.error(
                     "res-poller: resolve_paper_trade id=%s failed: %s", r["id"], e
+                )
+        return n
+
+    def _settle_live_orders(self, market_id: str, outcome: str, resolved_at_ts: int) -> int:
+        """Settle every unresolved live_order in this market and record realised
+        P&L. Mirrors `_settle_market` for the Phase B live (and dry-run) book.
+
+        Entry price is the actual fill_price when filled, else the limit_price
+        (the price we committed to) — so dry-run orders, which carry no fill,
+        settle against what they would have paid. Returns the count settled."""
+        rows = self._tracker._conn.execute(
+            "SELECT id, side, COALESCE(fill_price, limit_price) AS entry, size_usd "
+            "FROM live_orders WHERE market_id = ? AND resolved_outcome IS NULL "
+            "AND status NOT IN ('cancelled', 'error')",
+            (market_id,),
+        ).fetchall()
+
+        n = 0
+        for r in rows:
+            pnl = self._compute_pnl(
+                side=r["side"],
+                entry_price=float(r["entry"]),
+                size_usd=float(r["size_usd"]),
+                outcome=outcome,
+            )
+            try:
+                self._tracker.settle_live_order(
+                    order_id=int(r["id"]),
+                    outcome=outcome,
+                    pnl_usd=pnl,
+                    resolved_at_ts=resolved_at_ts,
+                )
+                n += 1
+            except Exception as e:
+                _log.error(
+                    "res-poller: settle_live_order id=%s failed: %s", r["id"], e
                 )
         return n

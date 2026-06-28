@@ -1164,6 +1164,39 @@ class Tracker:
                 self._conn.execute("ROLLBACK")
                 raise
 
+    def get_unresolved_live_order_market_ids(self) -> list[str]:
+        """Distinct market_ids with at least one live_order awaiting resolution.
+        Used by ResolutionPoller to settle live orders alongside paper trades."""
+        cur = self._conn.execute(
+            "SELECT DISTINCT market_id FROM live_orders WHERE resolved_outcome IS NULL"
+        )
+        return [r["market_id"] for r in cur.fetchall()]
+
+    def settle_live_order(
+        self,
+        order_id: int,
+        outcome: str,
+        pnl_usd: float,
+        resolved_at_ts: int,
+    ) -> None:
+        """Record a live order's resolution + realised P&L and free its
+        position slot (status -> 'settled')."""
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.execute(
+                    "UPDATE live_orders SET resolved_outcome=?, resolved_at_ts=?, "
+                    "pnl_usd=?, status='settled' WHERE id=?",
+                    (outcome, resolved_at_ts, pnl_usd, order_id),
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+        self._audit_write("live_order_settled", {
+            "order_id": order_id, "outcome": outcome, "pnl_usd": pnl_usd,
+        })
+
     # ─────────────────────────  shutdown  ─────────────────────────
 
     def close(self) -> None:
