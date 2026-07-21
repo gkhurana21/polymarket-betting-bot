@@ -29,7 +29,7 @@ from py_clob_client.clob_types import ApiCreds, OrderArgs
 from py_clob_client.constants import POLYGON
 from py_clob_client.order_builder.constants import BUY
 
-from bot.client import ClobReadOnlyClient
+from bot.client import CircuitBreakerOpen, ClobReadOnlyClient
 from bot.models import BetIntent, LiveOrder, WhaleSignal
 from bot.risk import RiskGate, RiskVeto
 from bot.strategy import Strategy
@@ -177,20 +177,15 @@ class LiveTrader:
         if signal.signal_type not in self._acts_on:
             return
 
-        # Resolve YES token_id for this market.
-        token_id = self._tracker.get_yes_token_id(signal.market_id)
+        # Resolve the outcome token we need to BUY (YES token for a YES bet,
+        # NO token for a NO bet), falling back to an on-demand market fetch.
+        token_id = self._resolve_token(signal.market_id, signal.side)
         if not token_id:
-            _log.debug("live_trader: no token_id for %s — skip", signal.market_id[:16])
+            _log.debug(
+                "live_trader: no %s token for %s — skip",
+                signal.side, signal.market_id[:16],
+            )
             return
-
-        # Use YES token for YES bets, but Polymarket YES token is always the
-        # "YES" side; for a NO bet we'd need the NO token. Get both from DB.
-        if signal.side == "NO":
-            token_id_no = self._tracker.get_no_token_id(signal.market_id)
-            if not token_id_no:
-                _log.debug("live_trader: no NO token_id for %s", signal.market_id[:16])
-                return
-            token_id = token_id_no
 
         signal_id = signal.id or 0
 
@@ -215,6 +210,52 @@ class LiveTrader:
 
         # Place order (or simulate in dry-run).
         self._place(intent)
+
+    def _resolve_token(self, market_id: str, side: str) -> str | None:
+        """Return the token_id to BUY for `side`, or None if unresolvable.
+
+        Primary source is market_token_map (populated by the scanner). Whales
+        routinely open positions in markets the scanner has not catalogued yet
+        — and before this fallback existed the NO side was effectively dead
+        (no_token_id was never populated for live signal markets, so every
+        NO-side signal was silently dropped). On a miss we fetch the market
+        once, cache BOTH tokens, and proceed. Never raises.
+        """
+        want_no = side == "NO"
+        cached = (
+            self._tracker.get_no_token_id(market_id)
+            if want_no
+            else self._tracker.get_yes_token_id(market_id)
+        )
+        if cached:
+            return cached
+
+        try:
+            market = self._client.get_market(market_id)
+        except CircuitBreakerOpen:
+            _log.warning("live_trader: circuit breaker open on get_market %s", market_id[:16])
+            return None
+        except Exception as e:
+            _log.warning("live_trader: get_market failed for %s (%s)", market_id[:16], e)
+            return None
+
+        yes_tok = no_tok = None
+        for t in (market.get("tokens") or []):
+            label = (t.get("outcome") or "").strip().lower()
+            if label == "yes":
+                yes_tok = t.get("token_id")
+            elif label == "no":
+                no_tok = t.get("token_id")
+
+        # Cache whatever we learned — non-fatal on failure.
+        if yes_tok or no_tok:
+            try:
+                if yes_tok:
+                    self._tracker.record_market_token(market_id, yes_tok, no_tok)
+            except Exception as e:
+                _log.warning("live_trader: caching tokens for %s failed: %s", market_id[:16], e)
+
+        return no_tok if want_no else yes_tok
 
     def _place(self, intent: BetIntent) -> None:
         placed_at = now_ms()
