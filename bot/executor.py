@@ -257,26 +257,71 @@ class LiveTrader:
 
         return no_tok if want_no else yes_tok
 
+    def _simulate_fill(self, intent: BetIntent) -> tuple[float | None, str]:
+        """Decide whether a GTC limit order at intent.limit_price would ACTUALLY
+        fill right now, and at what price. Returns (fill_price, status).
+
+        Why this exists: the original dry-run assumed every order filled at the
+        whale's own price. Measured against real book snapshots, the price we
+        could actually buy at was on average 4 cents WORSE (53% of orders), which
+        cut measured ROI from +21.8% to +4.8%. Detection latency (p50 ~310s)
+        means the market has usually already moved by the time we act, so
+        assuming the whale's fill price manufactures an edge that isn't there.
+
+        Semantics: we cross the spread to buy, so we fill at best_ask — but only
+        if best_ask <= our limit. Otherwise the order rests unfilled and must NOT
+        be counted as a trade.
+        """
+        try:
+            book = self._client.get_order_book(intent.token_id)
+        except CircuitBreakerOpen:
+            return None, "dry_run_nobook"
+        except Exception as e:
+            _log.debug("live_trader: book fetch failed for %s: %s", intent.market_id[:16], e)
+            return None, "dry_run_nobook"
+
+        asks = book.get("asks") or []
+        if not asks:
+            return None, "dry_run_nobook"
+        try:
+            best_ask = min(float(a[0]) for a in asks)
+        except (IndexError, TypeError, ValueError):
+            return None, "dry_run_nobook"
+
+        if best_ask <= intent.limit_price:
+            return best_ask, "dry_run"
+        return None, "dry_run_unfilled"
+
     def _place(self, intent: BetIntent) -> None:
         placed_at = now_ms()
 
         if self._dry_run:
-            shares = round(intent.size_usd / intent.limit_price, 2) if intent.limit_price else 0.0
-            _log.info(
-                "live_trader DRY-RUN: would BUY %s token $%.2f = %.2f shares @ %.4f market=%s",
-                intent.side, intent.size_usd, shares,
-                intent.limit_price, intent.market_id[:16],
-            )
+            fill_price, status = self._simulate_fill(intent)
+            if fill_price is None:
+                _log.info(
+                    "live_trader DRY-RUN: %s %s @ limit %.4f — %s (not counted as a trade)",
+                    intent.side, intent.market_id[:16], intent.limit_price, status,
+                )
+            else:
+                shares = round(intent.size_usd / fill_price, 2)
+                _log.info(
+                    "live_trader DRY-RUN: FILLED BUY %s $%.2f = %.2f shares @ %.4f "
+                    "(limit %.4f) market=%s",
+                    intent.side, intent.size_usd, shares, fill_price,
+                    intent.limit_price, intent.market_id[:16],
+                )
             order = LiveOrder(
                 clob_order_id=f"dry-{intent.risk_token_hash[:12]}",
                 market_id=intent.market_id,
                 side=intent.side,
                 limit_price=intent.limit_price,
                 size_usd=intent.size_usd,
-                status="dry_run",
+                status=status,
                 placed_at_ts=placed_at,
                 risk_token_hash=intent.risk_token_hash,
                 intent_json=intent.intent_json,
+                fill_price=fill_price,
+                filled_at_ts=placed_at if fill_price is not None else None,
             )
             self._tracker.insert_live_order(order)
             return

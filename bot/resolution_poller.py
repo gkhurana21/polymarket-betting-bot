@@ -292,10 +292,13 @@ class ResolutionPoller:
         Entry price is the actual fill_price when filled, else the limit_price
         (the price we committed to) — so dry-run orders, which carry no fill,
         settle against what they would have paid. Returns the count settled."""
+        # Only orders that actually filled are trades. 'dry_run_unfilled' /
+        # 'dry_run_nobook' rows are recorded for diagnostics but never settled,
+        # otherwise we'd book P&L on orders that would never have executed.
         rows = self._tracker._conn.execute(
             "SELECT id, side, COALESCE(fill_price, limit_price) AS entry, size_usd "
             "FROM live_orders WHERE market_id = ? AND resolved_outcome IS NULL "
-            "AND status NOT IN ('cancelled', 'error')",
+            "AND status NOT IN ('cancelled', 'error', 'dry_run_unfilled', 'dry_run_nobook')",
             (market_id,),
         ).fetchall()
 
