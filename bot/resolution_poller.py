@@ -298,7 +298,8 @@ class ResolutionPoller:
         rows = self._tracker._conn.execute(
             "SELECT id, side, COALESCE(fill_price, limit_price) AS entry, size_usd "
             "FROM live_orders WHERE market_id = ? AND resolved_outcome IS NULL "
-            "AND status NOT IN ('cancelled', 'error', 'dry_run_unfilled', 'dry_run_nobook')",
+            "AND status NOT IN ('cancelled', 'error', 'dry_run_unfilled', "
+            "                   'dry_run_nobook', 'dry_run_prefill_void')",
             (market_id,),
         ).fetchall()
 
