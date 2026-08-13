@@ -1,0 +1,99 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Friday — Polymarket liquidity-rewards market maker
+#  Every knob lives here. This mirrors the CONFIG discipline in
+#  ~/trading/mm-harness/bot.py: one place, no hunting.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─── dry_run ───────────────────────────────────────────────────────────────
+#  true  → compute quotes, log intent, place NO orders. The only correct
+#          value until the paper window has run and the reward-band rule is
+#          proven not to disqualify every market.
+#  false → live quoting. Requires PRIVATE_KEY. Read PLAYBOOK before flipping.
+# ───────────────────────────────────────────────────────────────────────────
+dry_run: true
+
+bankroll_usd: 500          # quoting both sides at min_size costs ~$200/market
+                           # (200*p + 200*(1-p)), so this funds 2 markets.
+
+bot:
+  log_level: INFO
+  db_path: ./data/friday.db
+  audit_log_path: ./data/audit.jsonl
+
+# ─── scanner ───────────────────────────────────────────────────────────────
+scanner:
+  top_n: 2                       # markets to quote; capital-bound, not taste
+  max_markets_scan: 150          # sampling-markets pull size
+  rerank_interval_seconds: 900
+  # An incumbent is only displaced if the challenger beats it by this margin.
+  # Without hysteresis Friday churns quotes chasing noise and pays the queue-
+  # position cost every re-rank for nothing.
+  hysteresis_margin: 0.25
+  min_pool_usd_per_day: 1.0      # ignore markets paying essentially nothing
+  # Reward efficiency and safety are OPPOSED: the thinnest books pay the most
+  # per share because nobody else will stand there. These two gates stop
+  # Friday from becoming the entire book. See Scanner.viable().
+  min_depth_shares: 100          # absolute floor on resting depth inside band
+  max_our_book_share: 0.60       # refuse if our quote would exceed this
+                                 # fraction of the resulting book
+  book_fetch_workers: 8
+
+# ─── quoting ───────────────────────────────────────────────────────────────
+quoting:
+  tick: 0.001                    # Polymarket minimum_tick_size
+  min_size_shares: 200           # reward qualification floor — below this the
+                                 # market pays us zero, so we quote 200 or nothing
+  size_shares: 200
+  half_spread: 0.008             # overwritten upward by the sigma floor
+  vol_floor_mult: 2.5            # half >= mult * sigma * (latency+1)
+  min_half: 0.001                # one tick
+  max_half: 0.050                # also hard-capped by the market's reward band
+  quote_quantise_ticks: 1
+  latency_ticks: 1               # REST-poll bound; measure, do not assume
+
+# ─── mark ──────────────────────────────────────────────────────────────────
+mark:
+  vol_window: 30
+  vol_guess: 0.002
+  max_move_ticks: 50             # outlier rejection
+  exclude_self_from_mark: true
+  mark_mode: micro               # A/B against "mid" on PnL, never on mark error
+  markout_lag: 10
+
+# ─── inventory ─────────────────────────────────────────────────────────────
+#  Scaled for shares at tick 0.001. skew is price shift PER SHARE:
+#  400 shares * 5e-6 = 0.002 = 2 ticks of center shift.
+inventory:
+  skew: 0.000005
+  soft_inventory_shares: 400     # refuse to add past this
+  position_limit_shares: 800
+  inventory_cushion: 0.85        # never exceed this fraction of the limit
+
+# ─── toxicity guard ────────────────────────────────────────────────────────
+#  bot.py:23 — "the only defense that helped in every regime and every
+#  latency tested. It is cheap. Keep it." Ships in v1, not as an add-on.
+toxicity:
+  tox_decay: 0.85
+  tox_widen: 0.000005            # 200 toxic shares -> ~1 tick of push
+  tox_shrink: 0.25
+
+# ─── safety ────────────────────────────────────────────────────────────────
+safety:
+  max_loss_usd: 15.0             # widen + halve size past this drawdown
+  kill_loss_usd: 40.0            # stop quoting entirely
+  # User-specified rule: if inventory-driven losses exceed reward earnings in
+  # any rolling window this long, halt and re-evaluate. Net, never gross.
+  reward_vs_inventory_window_days: 5
+
+# ─── guard ─────────────────────────────────────────────────────────────────
+guard:
+  news_halt_enabled: false       # pluggable; enable only after base economics
+                                 # are proven. For a maker this is a toxicity
+                                 # signal (about to be picked off), not alpha.
+
+reconnect:
+  retry_max_attempts: 5
+  initial_backoff_seconds: 2
+  max_backoff_seconds: 300
+  multiplier: 2.0
+  circuit_breaker_consecutive_fails: 5
