@@ -6,6 +6,7 @@ Commands:
   quote    run ONE quote cycle and show what would rest (no orders in dry_run)
   serve    run the quoting loop continuously
   report   net-PnL post-mortem over a window
+  dashboard  local web UI (localhost only) reading the live tracker
 
 Dry-run scope, stated plainly: the paper phase measures quoting behaviour,
 reward eligibility, and whether the vol-floor-vs-reward-band rule leaves any
@@ -225,6 +226,24 @@ def cmd_serve(config):
         eng.shutdown()
 
 
+def cmd_dashboard(config, port: int, with_loop: bool):
+    """Serve the UI. Optionally run the quoting loop in the same process so a
+    single command gives a live view."""
+    from friday import dashboard
+    bot = config.get("bot") or {}
+    tr = Tracker(bot.get("db_path", "./data/friday.db"))
+    if with_loop:
+        threading.Thread(target=cmd_serve, args=(config,), daemon=True).start()
+        _log.info("quoting loop started alongside dashboard")
+    try:
+        dashboard.serve(tr, config, port=port)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _SHUTDOWN.set()
+        tr.close()
+
+
 def cmd_report(config, days: float):
     bot = config.get("bot") or {}
     tr = Tracker(bot.get("db_path", "./data/friday.db"))
@@ -249,6 +268,10 @@ def main(argv=None) -> int:
     sub.add_parser("serve", help="continuous quoting loop")
     rp = sub.add_parser("report", help="net-PnL post-mortem")
     rp.add_argument("--days", type=float, default=5.0)
+    dp = sub.add_parser("dashboard", help="local web UI (localhost only)")
+    dp.add_argument("--port", type=int, default=8420)
+    dp.add_argument("--with-loop", action="store_true",
+                    help="also run the quoting loop in this process")
     args = p.parse_args(argv)
 
     for var in ("PRIVATE_KEY", "CLOB_API_KEY", "CLOB_API_SECRET", "CLOB_API_PASSPHRASE"):
@@ -269,7 +292,10 @@ def main(argv=None) -> int:
     {"scan": lambda: cmd_scan(config),
      "quote": lambda: cmd_quote(config),
      "serve": lambda: cmd_serve(config),
-     "report": lambda: cmd_report(config, args.days)}[args.command]()
+     "report": lambda: cmd_report(config, args.days),
+     "dashboard": lambda: cmd_dashboard(config, args.port,
+                                        getattr(args, "with_loop", False)),
+     }[args.command]()
     return 0
 
 

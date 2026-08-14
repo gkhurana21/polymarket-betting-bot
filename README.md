@@ -51,11 +51,17 @@ and inventory controls, not by reward capture**, which is why they ship in v1.
 ## Usage
 
 ```bash
-.venv/bin/python main.py scan              # rank markets, show selection
-.venv/bin/python main.py quote             # one cycle, show what would rest
-.venv/bin/python main.py serve             # continuous loop
-.venv/bin/python main.py report --days 5   # NET pnl post-mortem
+.venv/bin/python main.py scan                    # rank markets, show selection
+.venv/bin/python main.py quote                   # one cycle, show what would rest
+.venv/bin/python main.py serve                   # continuous loop
+.venv/bin/python main.py report --days 5         # NET pnl post-mortem
+.venv/bin/python main.py dashboard --with-loop   # web UI + loop, one process
 ```
+
+The dashboard binds to **127.0.0.1 only** — it exposes positions and PnL and has
+no auth. It shows NET as the headline, labels reward income as expected vs
+realised, and counts only markets quoted in the last 10 minutes so historical
+residue cannot inflate the totals.
 
 `dry_run: true` in `config.yaml` is the default and the only correct value
 until the paper window has run. Live quoting additionally requires

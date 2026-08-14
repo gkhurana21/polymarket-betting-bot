@@ -132,22 +132,30 @@ class Tracker:
     # -- reads --------------------------------------------------------------
 
     def expected_reward_since(self, since_ms: int) -> float:
-        """Integrate expected accrual over logged cycles.
+        """Integrate expected accrual over logged cycles, PER MARKET.
 
-        Each cycle represents one polling interval of resting time, so the
-        accrual is expected_usd_per_day scaled by that interval's share of a
-        day. Computed from actual cycle spacing, not assumed.
+        Grouping by market is not cosmetic. The cycles table interleaves
+        markets — with two live markets the rows run (m1@t, m2@t, m1@t+30,
+        m2@t+30, ...) — so integrating the table as one timeline charges most
+        pairs a dt of ~0 and under-reports by roughly the market count. That
+        number feeds the guard's reward-vs-inventory halt, and under-reporting
+        income there makes the guard trip early on a business that is actually
+        paying. Measured on a 24h run: 1.67 flat vs 2.75 grouped.
         """
         cur = self._conn.execute(
-            "SELECT ts, expected_usd_per_day FROM quote_cycles "
-            "WHERE ts >= ? AND quoting = 1 ORDER BY ts", (since_ms,))
-        rows = cur.fetchall()
+            "SELECT condition_id, ts, expected_usd_per_day FROM quote_cycles "
+            "WHERE ts >= ? AND quoting = 1 ORDER BY condition_id, ts", (since_ms,))
+        by_market: dict[str, list[tuple[int, float]]] = {}
+        for r in cur.fetchall():
+            by_market.setdefault(r["condition_id"], []).append(
+                (r["ts"], r["expected_usd_per_day"] or 0.0))
+
         total = 0.0
-        for i in range(1, len(rows)):
-            dt_ms = rows[i]["ts"] - rows[i - 1]["ts"]
-            if 0 < dt_ms <= 3600_000:            # ignore gaps > 1h (downtime)
-                rate = rows[i - 1]["expected_usd_per_day"] or 0.0
-                total += rate * (dt_ms / 86_400_000.0)
+        for rows in by_market.values():
+            for i in range(1, len(rows)):
+                dt_ms = rows[i][0] - rows[i - 1][0]
+                if 0 < dt_ms <= 3600_000:      # ignore gaps > 1h (downtime)
+                    total += rows[i - 1][1] * (dt_ms / 86_400_000.0)
         return total
 
     def realised_reward_since(self, since_ms: int) -> float:
@@ -159,6 +167,17 @@ class Tracker:
     def fills_since(self, since_ms: int) -> list[sqlite3.Row]:
         return self._conn.execute(
             "SELECT * FROM fills WHERE ts >= ? ORDER BY ts", (since_ms,)).fetchall()
+
+    def latest_cycle_per_market(self, since_ms: int) -> list[sqlite3.Row]:
+        """Most recent cycle for each market seen in the window."""
+        return self._conn.execute(
+            "SELECT * FROM quote_cycles WHERE id IN "
+            "  (SELECT MAX(id) FROM quote_cycles WHERE ts >= ? GROUP BY condition_id) "
+            "ORDER BY expected_usd_per_day DESC", (since_ms,)).fetchall()
+
+    def recent_fills(self, limit: int = 20) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM fills ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()
 
     def cycles_since(self, since_ms: int) -> list[sqlite3.Row]:
         return self._conn.execute(
