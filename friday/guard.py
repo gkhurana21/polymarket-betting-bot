@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from friday.events import BUS, GUARD, TRACKER
 from friday.logger import get_logger
 from friday.tracker import Tracker
 
@@ -42,6 +43,8 @@ class Guard:
     def latch(self, reason: str) -> None:
         if not self._halted:
             _log.error("GUARD HALT: %s", reason)
+            BUS.emit(GUARD, "broadcast", "halt", reason=reason)
+        BUS.node_state(GUARD, halted=True, reason=reason)
         self._halted = True
         self._halt_reason = reason
 
@@ -60,6 +63,8 @@ class Guard:
             self.latch(f"realised loss ${-realised_pnl_usd:.2f} >= kill ${self._kill_loss:.2f}")
             return GuardVerdict(False, self._halt_reason)
 
+        BUS.emit(TRACKER, GUARD, "check", pnl=round(realised_pnl_usd, 2))
+        BUS.node_state(GUARD, halted=False, pnl=round(realised_pnl_usd, 2))
         v = self.check_reward_vs_inventory(tracker)
         if not v.allowed:
             self.latch(v.reason)

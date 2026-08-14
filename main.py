@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from friday.adapter import PolymarketAdapter
 from friday.client import ClobReadOnlyClient
+from friday.events import BUS, TRACKER
 from friday.guard import Guard
 from friday.logger import get_logger, register_secret
 from friday.marketmaker import MarketMaker
@@ -92,6 +93,8 @@ class Engine:
             self.makers[cand.condition_id] = mm
         return mm
 
+    selected_ids: list[str] = []
+
     def cycle(self, selected) -> list[dict[str, Any]]:
         """One quote cycle across the selected markets."""
         out = []
@@ -143,7 +146,10 @@ class Engine:
                 "tox_bid": mm.tox_bid, "tox_ask": mm.tox_ask,
             }
             self.tracker.record_quote_cycle(row)
+            BUS.emit(f"mm:{cand.condition_id}", TRACKER, "record",
+                     quoting=bool(q.quoting), expected=row["expected_usd_per_day"])
             out.append(row)
+        self.selected_ids = [c.condition_id for c in selected]
         return out
 
     def shutdown(self) -> None:

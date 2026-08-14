@@ -41,6 +41,7 @@ from py_clob_client.constants import POLYGON
 from py_clob_client.order_builder.constants import BUY
 
 from friday.client import ClobReadOnlyClient
+from friday.events import BUS, CLOB
 from friday.logger import get_logger, register_secret
 
 _log = get_logger(__name__)
@@ -118,6 +119,15 @@ class PolymarketAdapter:
         """Our YES-ask expressed as the NO-token buy price."""
         return round(1.0 - ask_px, 4)
 
+    def _emit(self, tag: str, action: str, price: float, size: float) -> None:
+        node = f"leg:{tag.replace(':', ':')}" if tag.startswith("leg:") else f"leg:{tag}"
+        BUS.node_state(node, action=action, price=price, size=size,
+                       resting=action in ("placed", "replaced", "noop"))
+        if action in ("placed", "replaced"):
+            BUS.emit(node, CLOB, "order", action=action, price=price, size=size)
+        elif action == "cancelled":
+            BUS.emit(node, CLOB, "cancel", price=price)
+
     def sync_quote(self, tag: str, token_id: str, price: float, size: float) -> str:
         """Bring one resting leg in line with the target.
 
@@ -130,11 +140,13 @@ class PolymarketAdapter:
         if size <= 0:
             if cur is not None:
                 self._cancel(tag, cur)
+                self._emit(tag, "cancelled", cur.price, 0)
                 return "cancelled"
             return "noop"
 
         if cur is not None and abs(cur.price - price) < 1e-9 and abs(cur.size - size) < 1e-9:
             self.noops += 1
+            self._emit(tag, "noop", price, size)
             return "noop"                     # identical: do NOT touch it
 
         if cur is not None:
@@ -148,6 +160,7 @@ class PolymarketAdapter:
         if oid is None:
             return "skipped"
         self._resting[tag] = RestingOrder(oid, token_id, price, size)
+        self._emit(tag, action, price, size)
         return action
 
     def _place(self, token_id: str, price: float, size: float) -> str | None:

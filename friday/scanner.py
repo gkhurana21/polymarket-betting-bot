@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from friday.client import ClobReadOnlyClient
+from friday.events import BUS, CLOB, SCANNER
 from friday.logger import get_logger
 
 _log = get_logger(__name__)
@@ -175,6 +176,8 @@ class Scanner:
                     out.append(c)
         out.sort(key=lambda c: c.score, reverse=True)
         _log.info("scanner: %d markets fetched, %d scoreable", len(markets), len(out))
+        BUS.emit(CLOB, SCANNER, "book", fetched=len(markets), scoreable=len(out))
+        BUS.node_state(SCANNER, scoreable=len(out), fetched=len(markets))
         return out
 
     # -- selection ----------------------------------------------------------
@@ -242,4 +245,8 @@ class Scanner:
                     chosen_ids.discard(weakest.condition_id)
                     chosen.append(cand)
                     chosen_ids.add(cand.condition_id)
-        return chosen[: self._top_n]
+        final = chosen[: self._top_n]
+        for c in final:
+            BUS.emit(SCANNER, f"mm:{c.condition_id}", "select",
+                     score=round(c.score, 4), expected=round(c.expected_daily_usd(our_shares), 2))
+        return final

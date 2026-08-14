@@ -58,6 +58,16 @@ and inventory controls, not by reward capture**, which is why they ship in v1.
 .venv/bin/python main.py dashboard --with-loop   # web UI + loop, one process
 ```
 
+Two views: `/` is the table (net PnL, markets, fills) and `/graph` is a live
+force-directed view of the running architecture — CLOB → Scanner → Mark /
+Toxicity → market makers → order legs → Tracker / Guard. Every edge pulse is a
+real message from `friday/events.py`, so an edge that never fires is a path
+that genuinely never executed. Click any node to inspect its live state; drag
+to rearrange, scroll to zoom.
+
+**The event bus is in-process**, so the graph only shows traffic when the
+quoting loop runs in the same process — use `--with-loop`.
+
 The dashboard binds to **127.0.0.1 only** — it exposes positions and PnL and has
 no auth. It shows NET as the headline, labels reward income as expected vs
 realised, and counts only markets quoted in the last 10 minutes so historical

@@ -34,6 +34,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
+from friday.events import BUS, CLOB
 from friday.logger import get_logger
 
 _log = get_logger(__name__)
@@ -270,12 +271,20 @@ class MarketMaker:
         self.tick_index += 1
 
         fair, vol_est = self.mark.update(bids, asks, own_bid, own_ask)
+        cid = self.condition_id
+        BUS.emit(CLOB, f"mark:{cid}", "book",
+                 bids=len(bids), asks=len(asks))
+        BUS.node_state(f"mark:{cid}", fair=fair, vol=round(vol_est, 5))
         if fair is None:
+            BUS.node_state(f"mm:{cid}", quoting=False, reason="no_mark")
             return Quote(reason="no_mark")          # never guess a mark
+        BUS.emit(f"mark:{cid}", f"mm:{cid}", "fair",
+                 fair=round(fair, 4), vol=round(vol_est, 5))
         self.markout.resolve(self.tick_index, fair)
 
         scale = self.check_safety(pnl)
         if scale == 0.0:
+            BUS.node_state(f"mm:{cid}", quoting=False, reason="killed", killed=True)
             return Quote(reason="killed")
 
         self.tox_bid *= self._tox_decay
@@ -283,6 +292,9 @@ class MarketMaker:
 
         half = self.half_spread(vol_est)
         if half is None:
+            BUS.node_state(f"mm:{cid}", quoting=False, reason="vol_exceeds_reward_band")
+            BUS.emit(f"mark:{cid}", f"mm:{cid}", "standdown",
+                     vol=round(vol_est, 5), band=self.band)
             return Quote(reason="vol_exceeds_reward_band")
 
         # Widen if our own fills are proving us wrong.
@@ -293,6 +305,10 @@ class MarketMaker:
         center = fair - position * self._skew
 
         net = self.tox_bid - self.tox_ask
+        BUS.node_state(f"tox:{cid}", net=round(net, 1),
+                       tox_bid=round(self.tox_bid, 1), tox_ask=round(self.tox_ask, 1))
+        if abs(net) > 1e-6:
+            BUS.emit(f"tox:{cid}", f"mm:{cid}", "tox", net=round(net, 1))
         bid_push = max(0.0, net) * self._tox_widen
         ask_push = max(0.0, -net) * self._tox_widen
 
@@ -331,8 +347,13 @@ class MarketMaker:
             ask_sz = 0.0
 
         if bid_sz == 0.0 and ask_sz == 0.0:
+            BUS.node_state(f"mm:{cid}", quoting=False, reason="size_below_reward_floor")
             return Quote(reason="size_below_reward_floor")
 
+        BUS.node_state(f"mm:{cid}", quoting=True, reason=None,
+                       half=round(half, 4), band=self.band,
+                       band_use=round(half / self.band, 3) if self.band else 0,
+                       position=position, markout=self.markout.average())
         return Quote(bid_px=bid_px, bid_sz=bid_sz,
                      ask_px=ask_px, ask_sz=ask_sz)
 

@@ -17,13 +17,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from friday.events import BUS
 from friday.logger import get_logger
 from friday.postmortem import PostMortem
+from friday.topology import build_graph
 from friday.tracker import Tracker
 
 _log = get_logger(__name__)
 
 _STATIC = Path(__file__).parent / "static" / "dashboard.html"
+_GRAPH = Path(__file__).parent / "static" / "graph.html"
 _MS_PER_DAY = 86_400_000
 
 
@@ -116,11 +119,34 @@ def make_handler(tracker: Tracker, config: dict[str, Any]):
 
         def do_GET(self):
             path = self.path.split("?")[0]
-            if path in ("/", "/index.html"):
+            if path in ("/", "/index.html", "/graph"):
+                f = _GRAPH if path == "/graph" else _STATIC
                 try:
-                    self._send(200, _STATIC.read_bytes(), "text/html; charset=utf-8")
+                    self._send(200, f.read_bytes(), "text/html; charset=utf-8")
                 except OSError:
-                    self._send(500, b"dashboard.html missing", "text/plain")
+                    self._send(500, b"page missing", "text/plain")
+            elif path == "/api/graph":
+                try:
+                    since = int(self.path.split("since=")[1].split("&")[0]) \
+                        if "since=" in self.path else 0
+                except (ValueError, IndexError):
+                    since = 0
+                try:
+                    state = build_state(tracker, config)
+                    # The graph is a picture of NOW. Markets rotate on re-rank,
+                    # so the 10-minute table window would draw stale makers
+                    # alongside live ones and imply more concurrency than exists.
+                    live = [m for m in state["markets"] if m["age_s"] <= 150]
+                    seq, evs = BUS.since(since)
+                    body = {"graph": build_graph(live),
+                            "events": evs, "seq": seq,
+                            "net": state["net"], "totals": state["totals"],
+                            "dry_run": state["dry_run"], "ts": state["ts"]}
+                    self._send(200, json.dumps(body).encode(), "application/json")
+                except Exception as e:
+                    _log.error("graph build failed: %s", e, exc_info=True)
+                    self._send(500, json.dumps({"error": str(e)}).encode(),
+                               "application/json")
             elif path == "/api/state":
                 try:
                     state = build_state(tracker, config)
