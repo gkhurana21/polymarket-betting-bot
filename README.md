@@ -55,6 +55,7 @@ and inventory controls, not by reward capture**, which is why they ship in v1.
 .venv/bin/python main.py quote                   # one cycle, show what would rest
 .venv/bin/python main.py serve                   # continuous loop
 .venv/bin/python main.py report --days 5         # NET pnl post-mortem
+.venv/bin/python main.py rewards                 # expected vs realised rewards
 .venv/bin/python main.py dashboard --with-loop   # web UI + loop, one process
 ```
 
@@ -82,6 +83,31 @@ reward eligibility, and whether the band-vs-vol rule leaves anything quotable.
 It does **not** produce fill P&L. Simulating passive fills would reintroduce
 exactly the optimistic-fill error that invalidated the predecessor project
 (a measured +21.8% became −18.1% once real obtainable prices were used).
+
+## Risk layers
+
+Three independent gates, each catching what the others structurally cannot:
+
+| Gate | Scope | Catches |
+|---|---|---|
+| `marketmaker` | one market | vol beyond the reward band, toxic flow, per-market inventory, drawdown kill |
+| `inventory.PortfolioRisk` | whole book | total exposure across markets — two markets each under their own 800-share limit still permit 1,600 of correlated exposure, and Friday's markets are often politically correlated |
+| `guard` | account | realised-loss kill, and the rolling-window rule that halts when inventory losses exceed reward earnings |
+
+A `flock` instance lock (`friday/lock.py`) permits exactly one quoting loop.
+Three engines once ran concurrently for 1.7 days against the same database;
+live that would be three engines competing for the same markets with every
+position limit silently multiplied.
+
+## Measuring the reward, honestly
+
+`main.py rewards` reconciles **expected** accrual (computed from our own logged
+resting size and the advertised pool) against **realised** credits. With no
+credits recorded the capture ratio is reported as `None`, never `0` — "captured
+nothing" and "never measured capture" are different claims, and conflating them
+is how a projection quietly becomes a result. Realised credits are imported with
+`--import <condition_id> <usd> <YYYY-MM-DD>` until an authenticated endpoint is
+wired up.
 
 ## Capital discipline
 

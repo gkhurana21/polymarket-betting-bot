@@ -34,8 +34,10 @@ from friday.adapter import PolymarketAdapter
 from friday.client import ClobReadOnlyClient
 from friday.events import BUS, TRACKER
 from friday.guard import Guard
+from friday.inventory import PortfolioRisk
+from friday.lock import AlreadyRunning, InstanceLock
 from friday.logger import get_logger, register_secret
-from friday.marketmaker import MarketMaker
+from friday.marketmaker import MarketMaker, Quote
 from friday.postmortem import PostMortem
 from friday.scanner import Scanner
 from friday.tracker import Tracker
@@ -72,11 +74,13 @@ class Engine:
         self.config = config
         self.dry_run = bool(config.get("dry_run", True))
         bot = config.get("bot") or {}
-        self.tracker = Tracker(bot.get("db_path", "./data/friday.db"),
-                               bot.get("audit_log_path", "./data/audit.jsonl"))
+        db = bot.get("db_path", "./data/friday.db")
+        self.lock = InstanceLock(Path(db).parent / "friday.lock").acquire()
+        self.tracker = Tracker(db, bot.get("audit_log_path", "./data/audit.jsonl"))
         self.client = build_client(config)
         self.scanner = Scanner(self.client, config)
         self.guard = Guard(config)
+        self.portfolio = PortfolioRisk(config)
         self.adapter = PolymarketAdapter(self.client, dry_run=self.dry_run)
         self.makers: dict[str, MarketMaker] = {}
         self.positions: dict[str, float] = {}
@@ -98,6 +102,8 @@ class Engine:
     def cycle(self, selected) -> list[dict[str, Any]]:
         """One quote cycle across the selected markets."""
         out = []
+        deployed = 0.0                       # USD committed so far THIS cycle
+        active: set[str] = set()
         for cand in selected:
             mm = self._maker(cand)
             try:
@@ -117,6 +123,23 @@ class Engine:
                 own_ask = (1.0 - ra.price, ra.size)   # NO-leg back into YES terms
 
             q = mm.quote(bids, asks, pos, self.realised_pnl, own_bid, own_ask)
+
+            # Portfolio gate: per-market limits cannot cap total exposure, so
+            # the whole-book check runs here, before capital is committed.
+            if q.quoting:
+                want = PortfolioRisk.quote_notional(q.bid_px, q.bid_sz,
+                                                    q.ask_px, q.ask_sz)
+                pv = self.portfolio.gate(cand.condition_id, self.positions,
+                                         deployed, want, active)
+                if not pv.allowed:
+                    _log.info("portfolio gate blocked %s: %s",
+                              cand.condition_id[:12], pv.reason)
+                    BUS.node_state(f"mm:{cand.condition_id}", quoting=False,
+                                   reason="portfolio_cap")
+                    q = Quote(reason="portfolio_cap")
+                else:
+                    deployed += want
+                    active.add(cand.condition_id)
 
             if q.quoting:
                 self.adapter.sync_quote(bid_tag, cand.yes_token_id, q.bid_px, q.bid_sz)
@@ -150,12 +173,16 @@ class Engine:
                      quoting=bool(q.quoting), expected=row["expected_usd_per_day"])
             out.append(row)
         self.selected_ids = [c.condition_id for c in selected]
+        self.portfolio_state = self.portfolio.snapshot(self.positions, deployed, active)
+        BUS.node_state("guard", **{f"pf_{k}": v for k, v in
+                                   self.portfolio_state.items()})
         return out
 
     def shutdown(self) -> None:
         n = self.adapter.cancel_all()
         _log.info("cancelled %d resting orders", n)
         self.tracker.close()
+        self.lock.release()
 
 
 # ─────────────────────────────  commands  ─────────────────────────────
@@ -232,6 +259,22 @@ def cmd_serve(config):
         eng.shutdown()
 
 
+def cmd_rewards(config, imp, days: float):
+    from friday.rewards import Rewards
+    bot = config.get("bot") or {}
+    tr = Tracker(bot.get("db_path", "./data/friday.db"))
+    try:
+        r = Rewards(tr)
+        if imp:
+            cid, usd, day = imp
+            r.record_credit(cid, float(usd), day)
+            print(f"recorded ${float(usd):.2f} for {cid[:16]}… on {day}")
+        print()
+        print(r.reconcile(window_days=days).render())
+    finally:
+        tr.close()
+
+
 def cmd_dashboard(config, port: int, with_loop: bool):
     """Serve the UI. Optionally run the quoting loop in the same process so a
     single command gives a live view."""
@@ -274,6 +317,11 @@ def main(argv=None) -> int:
     sub.add_parser("serve", help="continuous quoting loop")
     rp = sub.add_parser("report", help="net-PnL post-mortem")
     rp.add_argument("--days", type=float, default=5.0)
+    rw = sub.add_parser("rewards", help="expected vs realised reward reconciliation")
+    rw.add_argument("--import", dest="imp", nargs=3,
+                    metavar=("CONDITION_ID", "USD", "YYYY-MM-DD"),
+                    help="record a realised reward credit")
+    rw.add_argument("--days", type=float, default=7.0)
     dp = sub.add_parser("dashboard", help="local web UI (localhost only)")
     dp.add_argument("--port", type=int, default=8420)
     dp.add_argument("--with-loop", action="store_true",
@@ -295,10 +343,19 @@ def main(argv=None) -> int:
     signal.signal(signal.SIGINT, _sig)
     signal.signal(signal.SIGTERM, _sig)
 
+    try:
+        return _dispatch(args, config)
+    except AlreadyRunning as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+
+
+def _dispatch(args, config) -> int:
     {"scan": lambda: cmd_scan(config),
      "quote": lambda: cmd_quote(config),
      "serve": lambda: cmd_serve(config),
      "report": lambda: cmd_report(config, args.days),
+     "rewards": lambda: cmd_rewards(config, getattr(args, "imp", None), args.days),
      "dashboard": lambda: cmd_dashboard(config, args.port,
                                         getattr(args, "with_loop", False)),
      }[args.command]()

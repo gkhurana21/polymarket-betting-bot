@@ -167,8 +167,9 @@ class MarkoutTracker:
 class MarketMaker:
     """One market, one inventory, one toxicity pair.
 
-    Risk that spans markets belongs in inventory.PortfolioRisk, not here —
-    a per-market limit cannot express "cap my total exposure".
+    Risk that spans markets belongs in inventory.PortfolioRisk, not here — a
+    per-market limit cannot express "cap my total exposure". That gate runs in
+    the engine before capital is committed to any market.
     """
 
     def __init__(

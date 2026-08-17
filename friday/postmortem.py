@@ -73,10 +73,10 @@ class Report:
                 f"{k}={v}" for k, v in sorted(self.decline_reasons.items(),
                                               key=lambda kv: -kv[1])))
         if self.reward_realised_usd == 0 and self.reward_expected_usd > 0:
-            lines.append("")
-            lines.append("  NOTE: reward income is EXPECTED, not realised. Until "
-                         "credits are\n        confirmed on-chain this net figure "
-                         "is a projection.")
+            lines += ["",
+                      "  NOTE: reward income is EXPECTED, not realised — no credit has ever",
+                      "        been recorded, so capture has never been measured. This net",
+                      "        figure is a projection. See: main.py rewards"]
         return "\n".join(lines)
 
 

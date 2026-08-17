@@ -85,6 +85,16 @@ safety:
   # any rolling window this long, halt and re-evaluate. Net, never gross.
   reward_vs_inventory_window_days: 5
 
+# ─── portfolio ─────────────────────────────────────────────────────────────
+#  Limits that SPAN markets. Per-market limits cannot express "cap my total
+#  exposure" — two markets each allowed 800 shares permit 1,600 of correlated
+#  exposure. Friday's markets are often politically correlated (several
+#  governor races), so one news event can move every position at once.
+portfolio:
+  max_gross_shares: 1600           # total |position| across all markets
+  max_gross_notional_usd: 450      # USD committed to resting quotes (90% of $500)
+  max_concurrent_markets: 2        # keep in step with scanner.top_n
+
 # ─── guard ─────────────────────────────────────────────────────────────────
 guard:
   news_halt_enabled: false       # pluggable; enable only after base economics
