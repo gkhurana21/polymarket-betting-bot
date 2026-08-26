@@ -269,12 +269,102 @@ Handler stops threads (5 s timeout), writes `state.json`, closes DB. Safe to res
 ```bash
 # Module smoke tests (offline unless noted)
 .venv/bin/python tests/smoke_module1.py
-# … through smoke_module11.py
+# … through smoke_module12.py
 ```
 
 See [`PLAN.md`](PLAN.md) §14 for build order and module map.
 
 ---
+
+## Binary complement arbitrage (research module)
+
+**Status: observation only. This module has never placed an order and contains
+no code path that can.**
+
+### The hypothesis
+
+One YES share and one NO share of the same binary market must together pay
+exactly **$1.00** at resolution, whichever way it settles. So if equal
+quantities of both can be bought for materially less than $1.00 per pair, the
+difference is locked in regardless of the outcome. Unlike whale-copying — which
+this repository tested and [rejected](FINDINGS.md) — the claim is *structural*
+rather than predictive: it needs no view on who wins.
+
+### The exact cost model
+
+Every figure is computed from **ask-side VWAP**. A midpoint or last-traded
+price is not a price you can buy at, and using one is the easiest way to
+manufacture an edge that evaporates on contact.
+
+```
+equal_shares   = largest quantity buyable on BOTH books within max_notional_usd,
+                 capped by the weaker book's total ask depth
+yes_cost       = VWAP cost of equal_shares walking the YES asks cheapest-first
+no_cost        = VWAP cost of equal_shares walking the NO  asks cheapest-first
+
+gross_payout   = equal_shares × $1.00
+gross_cost     = yes_cost + no_cost
+fees           = gross_cost × estimated_fee_bps_per_leg      × 2 / 10_000
+slippage       = gross_cost × slippage_buffer_bps_per_leg    × 2 / 10_000
+
+net_locked_pnl = gross_payout − gross_cost − fees − slippage
+net_edge_bps   = net_locked_pnl / gross_cost × 10_000
+```
+
+A candidate is marked `executable` only when **all** hold: both books supply the
+full equal-share quantity, the books are fresher than `max_book_age_seconds`,
+`net_locked_pnl > 0`, `net_edge_bps >= min_net_edge_bps`, and the market passes
+the active / open / order-book / binary checks.
+
+Rejected candidates are stored too, with an explicit reason
+(`missing_token`, `one_sided_book`, `insufficient_yes_depth`,
+`insufficient_no_depth`, `stale_book`, `not_profitable`,
+`edge_below_threshold`). The research question is how *often* an edge exists,
+and that cannot be answered from successes alone.
+
+### What to expect
+
+A prior measurement across 116 liquid markets found `ask(YES) + ask(NO)`
+uniformly equal to **1.0010** — exactly one `minimum_tick_size` above parity, on
+every market checked. Two consequences follow:
+
+1. At the touch, the complement pair cost **more** than it pays, before any fees.
+2. VWAP over depth is by construction **≥** the best ask, so walking deeper into
+   the book only raises the cost. **A market that fails at the touch cannot pass
+   at depth.**
+
+So the expected output is overwhelmingly rejections. That is the finding, not a
+malfunction — and it is worth recording rigorously rather than asserting from
+one snapshot.
+
+### Assumptions that need manual validation
+
+These are **configured guesses**, deliberately conservative. Nothing here has
+been confirmed against a real fill:
+
+| Assumption | Default | Why it needs checking |
+|---|---|---|
+| `estimated_fee_bps_per_leg` | 100 (1%) | Polymarket's live fill records show **no fee field**, and `maker_base_fee`/`taker_base_fee` on the market object read `1000` with **undocumented units**. The real taker cost is unverified. |
+| `slippage_buffer_bps_per_leg` | 50 (0.5%) | A buffer, not a measurement. True slippage depends on latency between pricing and filling two legs. |
+| **$1.00 pair settlement** | assumed | Not every market settles conventionally. Multi-outcome (`neg_risk`) markets, 50/50-invalid resolutions, and unusual resolution criteria can break the identity. **`evidence_json` stores the full market metadata and question for exactly this reason** — review any candidate by hand before acting. |
+| Two-leg execution risk | not modelled | Filling one leg and missing the other converts a "locked" pair into an outright directional position. This module does not model that risk at all. |
+
+### Usage
+
+```bash
+python main.py arb-scan              # one observation pass (read-only)
+python main.py arb-status --days 7   # frequency, capacity, edge, rejections
+```
+
+Both commands are read-only against Polymarket. Results land in the
+`arbitrage_opportunities` table, with one `arbitrage_opportunity` JSONL audit
+event per row.
+
+> **A positive observation is not permission to trade.** It is one data point
+> under unvalidated fee and settlement assumptions. Establishing frequency,
+> capacity, persistence, and validated costs comes first — and this repository's
+> history is a reminder of what happens when a measurement is trusted before its
+> ruler is checked.
 
 ## License
 

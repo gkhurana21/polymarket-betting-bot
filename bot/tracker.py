@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.models import (
+    ArbitrageOpportunity,
     BookSnapshot,
     MarketSnapshot,
     PaperTrade,
@@ -206,6 +207,48 @@ CREATE TABLE IF NOT EXISTS live_orders (    -- Phase B
   risk_token_hash TEXT NOT NULL,
   intent_json TEXT NOT NULL
 );
+
+-- ──────────────────  binary complement arbitrage (research)  ──────────────────
+-- Observation-only. Written by bot/arbitrage_scanner.py; nothing here is ever
+-- an instruction to trade. Rejected candidates are stored alongside executable
+-- ones because the research question is how OFTEN an edge exists, which cannot
+-- be answered from successes alone.
+--
+-- UNIQUE(market_id, observed_at_ts) with INSERT OR IGNORE: a repeated
+-- observation of the same market at the same millisecond is a duplicate write,
+-- not new evidence. Historical observations are never overwritten.
+CREATE TABLE IF NOT EXISTS arbitrage_opportunities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  market_id TEXT NOT NULL,
+  question TEXT,
+  observed_at_ts INTEGER NOT NULL,
+  yes_token_id TEXT NOT NULL,
+  no_token_id TEXT,
+  yes_shares REAL NOT NULL,
+  yes_vwap REAL NOT NULL,
+  yes_cost_usd REAL NOT NULL,
+  yes_levels_used INTEGER NOT NULL,
+  no_shares REAL NOT NULL,
+  no_vwap REAL NOT NULL,
+  no_cost_usd REAL NOT NULL,
+  no_levels_used INTEGER NOT NULL,
+  equal_shares REAL NOT NULL,
+  gross_payout_usd REAL NOT NULL,
+  gross_cost_usd REAL NOT NULL,
+  estimated_fees_usd REAL NOT NULL,
+  estimated_slippage_usd REAL NOT NULL,
+  net_locked_pnl_usd REAL NOT NULL,
+  net_edge_bps REAL NOT NULL,
+  book_age_ms INTEGER,
+  executable INTEGER NOT NULL,
+  reject_reason TEXT,
+  evidence_json TEXT NOT NULL,
+  UNIQUE(market_id, observed_at_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_arb_market_ts
+  ON arbitrage_opportunities(market_id, observed_at_ts);
+CREATE INDEX IF NOT EXISTS idx_arb_exec_ts
+  ON arbitrage_opportunities(executable, observed_at_ts DESC);
 """
 
 
@@ -1196,6 +1239,84 @@ class Tracker:
         self._audit_write("live_order_settled", {
             "order_id": order_id, "outcome": outcome, "pnl_usd": pnl_usd,
         })
+
+    # ──────────────────  binary complement arbitrage (research)  ──────────────
+
+    def record_arbitrage_opportunity(self, opp: "ArbitrageOpportunity") -> int | None:
+        """Persist one observed complement-pair candidate.
+
+        Returns the new row id, or None when the observation was a duplicate
+        (same market, same millisecond) and was therefore ignored. Exactly one
+        audit event is emitted per row actually inserted — a deduplicated write
+        must not produce a second event claiming new evidence.
+        """
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO arbitrage_opportunities ("
+                    " market_id, question, observed_at_ts,"
+                    " yes_token_id, no_token_id,"
+                    " yes_shares, yes_vwap, yes_cost_usd, yes_levels_used,"
+                    " no_shares, no_vwap, no_cost_usd, no_levels_used,"
+                    " equal_shares, gross_payout_usd, gross_cost_usd,"
+                    " estimated_fees_usd, estimated_slippage_usd,"
+                    " net_locked_pnl_usd, net_edge_bps, book_age_ms,"
+                    " executable, reject_reason, evidence_json"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        opp.market_id, opp.question, opp.observed_at_ts,
+                        opp.yes_leg.token_id, opp.no_leg.token_id,
+                        opp.yes_leg.shares, opp.yes_leg.vwap_price,
+                        opp.yes_leg.cost_usd, opp.yes_leg.levels_used,
+                        opp.no_leg.shares, opp.no_leg.vwap_price,
+                        opp.no_leg.cost_usd, opp.no_leg.levels_used,
+                        opp.equal_shares, opp.gross_payout_usd, opp.gross_cost_usd,
+                        opp.estimated_fees_usd, opp.estimated_slippage_usd,
+                        opp.net_locked_pnl_usd, opp.net_edge_bps, opp.book_age_ms,
+                        1 if opp.executable else 0, opp.reject_reason,
+                        opp.evidence_json,
+                    ),
+                )
+                inserted = cur.rowcount == 1
+                row_id = cur.lastrowid if inserted else None
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+        if inserted:
+            self._audit_write("arbitrage_opportunity", {
+                "market_id": opp.market_id,
+                "observed_at_ts": opp.observed_at_ts,
+                "equal_shares": opp.equal_shares,
+                "gross_cost_usd": opp.gross_cost_usd,
+                "net_locked_pnl_usd": opp.net_locked_pnl_usd,
+                "net_edge_bps": opp.net_edge_bps,
+                "executable": opp.executable,
+                "reject_reason": opp.reject_reason,
+            })
+        return row_id
+
+    def get_arbitrage_observations(
+        self, since_ts_ms: int, executable_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """All observations since a cutoff, newest first."""
+        sql = ("SELECT * FROM arbitrage_opportunities WHERE observed_at_ts >= ?")
+        params: list[Any] = [since_ts_ms]
+        if executable_only:
+            sql += " AND executable = 1"
+        sql += " ORDER BY observed_at_ts DESC"
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def get_top_arbitrage(self, since_ts_ms: int, limit: int = 10) -> list[dict[str, Any]]:
+        """Best candidates by net edge, executable first."""
+        cur = self._conn.execute(
+            "SELECT * FROM arbitrage_opportunities WHERE observed_at_ts >= ? "
+            "ORDER BY executable DESC, net_edge_bps DESC LIMIT ?",
+            (since_ts_ms, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
     # ─────────────────────────  shutdown  ─────────────────────────
 

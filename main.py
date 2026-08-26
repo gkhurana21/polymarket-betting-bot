@@ -9,6 +9,7 @@ Phase B `run` is intentionally absent — refuses if invoked.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import signal
@@ -24,6 +25,7 @@ from rich.table import Table
 
 import bot
 from bot import PHASE as BOT_PHASE
+from bot.arbitrage_scanner import ArbitrageScanner
 from bot.calibration import evaluate_decision_matrix, validate_calibration_readiness
 from bot.client import ClobReadOnlyClient
 from bot.market_scanner import MarketScanner
@@ -491,6 +493,100 @@ def cmd_backtest(config: dict[str, Any]) -> None:
         tracker.close()
 
 
+def cmd_arb_scan(config: dict[str, Any]) -> None:
+    """One observation pass of the binary complement arbitrage scanner.
+
+    Read-only against Polymarket. Records evidence; never trades.
+    """
+    client = _build_client(config)
+    db_path, audit_path, _ = _paths(config)
+    tracker = Tracker(db_path=db_path, audit_log_path=audit_path)
+    try:
+        scanner = ArbitrageScanner(client, tracker, config)
+        r = scanner.scan_once()
+        _console.print(
+            f"\n[bold]Complement arb scan[/] — "
+            f"considered={r.markets_considered} eligible={r.markets_eligible} "
+            f"observed={r.opportunities_found} "
+            f"[cyan]executable={r.executable_opportunities}[/] "
+            f"notional=${r.total_executable_notional_usd:,.2f} "
+            f"errors={r.errors}"
+        )
+        if r.executable_opportunities == 0:
+            _console.print(
+                "[dim]No executable complement arbitrage this pass. Expected: "
+                "VWAP over depth is always ≥ best ask, so a market that fails "
+                "at the touch cannot pass deeper.[/]"
+            )
+        _console.print("[dim]Observation only — nothing was traded.[/]")
+        for e in r.error_details[:5]:
+            _console.print(f"  [red]{e.error_type}[/] {e.market_id[:16]} {e.message[:70]}")
+    finally:
+        tracker.close()
+
+
+def cmd_arb_status(config: dict[str, Any], days: int) -> None:
+    """Summarise recorded complement-arb observations."""
+    db_path, audit_path, _ = _paths(config)
+    tracker = Tracker(db_path=db_path, audit_log_path=audit_path)
+    since = now_ms() - days * 86_400_000
+    try:
+        rows = tracker.get_arbitrage_observations(since)
+        if not rows:
+            _console.print(f"No arbitrage observations in the last {days}d. "
+                           "Run [cyan]arb-scan[/] first.")
+            return
+
+        execs = [r for r in rows if r["executable"]]
+        edges = sorted(r["net_edge_bps"] for r in rows)
+        median = edges[len(edges) // 2]
+        notional = sum(r["gross_cost_usd"] for r in execs)
+
+        _console.print(f"\n[bold]Complement arb observations — last {days}d[/]")
+        _console.print(f"  observations        {len(rows)}")
+        _console.print(f"  executable          {len(execs)}"
+                       f"  ({len(execs) / len(rows):.1%})")
+        _console.print(f"  median net edge     {median:,.0f} bps")
+        _console.print(f"  max net edge        {edges[-1]:,.0f} bps")
+        _console.print(f"  executable notional ${notional:,.2f}")
+
+        reasons: dict[str, int] = {}
+        for r in rows:
+            if not r["executable"]:
+                reasons[r["reject_reason"] or "unknown"] = \
+                    reasons.get(r["reject_reason"] or "unknown", 0) + 1
+        if reasons:
+            _console.print("\n[bold]Why candidates were rejected[/]")
+            for k, v in sorted(reasons.items(), key=lambda kv: -kv[1]):
+                _console.print(f"  {k:26} {v}")
+
+        table = Table(title="Top 10 candidates by net edge")
+        table.add_column("market")
+        table.add_column("observed")
+        table.add_column("shares", justify="right")
+        table.add_column("net p&l", justify="right")
+        table.add_column("edge bps", justify="right")
+        table.add_column("status")
+        for r in tracker.get_top_arbitrage(since, limit=10):
+            ts = datetime.datetime.fromtimestamp(
+                r["observed_at_ts"] / 1000).strftime("%m-%d %H:%M")
+            status = "[green]executable[/]" if r["executable"] \
+                else f"[dim]{r['reject_reason']}[/]"
+            table.add_row(
+                (r["question"] or r["market_id"])[:34],
+                ts, f"{r['equal_shares']:.1f}",
+                f"${r['net_locked_pnl_usd']:+.4f}",
+                f"{r['net_edge_bps']:+,.0f}", status,
+            )
+        _console.print(table)
+        _console.print(
+            "[yellow]A positive observation is evidence, not permission to "
+            "trade.[/] Fee and settlement assumptions are unvalidated — see README."
+        )
+    finally:
+        tracker.close()
+
+
 def cmd_serve(config: dict[str, Any]) -> None:
     global _ORCHESTRATOR
     _ORCHESTRATOR = Orchestrator(config)
@@ -645,6 +741,10 @@ def _build_parser() -> argparse.ArgumentParser:
     aw.add_argument("--trust", type=float, default=0.9)
 
     sub.add_parser("backtest", help="Replay paper-stream stats (≥7 days required)")
+
+    sub.add_parser("arb-scan", help="One binary-complement arbitrage observation pass (read-only)")
+    arb = sub.add_parser("arb-status", help="Summarise recorded arbitrage observations")
+    arb.add_argument("--days", type=int, default=7)
     sub.add_parser("serve", help="Run Phase A daemon (all background loops)")
 
     run = sub.add_parser("run", help="[Phase B] Live trading")
@@ -695,6 +795,8 @@ def main(argv: list[str] | None = None) -> int:
             config, args.address, args.label, args.trust
         ),
         "backtest": lambda: cmd_backtest(config),
+        "arb-scan": lambda: cmd_arb_scan(config),
+        "arb-status": lambda: cmd_arb_status(config, days=args.days),
         "serve": lambda: cmd_serve(config),
         "run": lambda: cmd_run(config),
     }

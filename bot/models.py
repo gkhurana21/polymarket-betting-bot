@@ -178,6 +178,84 @@ class LiveOrder(DataClassJsonMixin):
     id: int | None = None
 
 
+# ───────────────────────  binary complement arbitrage  ───────────────────────
+#  Research-only models. A binary market's YES + NO shares must together pay
+#  exactly $1 at resolution, so buying equal quantities of both for materially
+#  less than $1 would lock a return independent of the outcome. These records
+#  capture whether that was ever true at EXECUTABLE (ask-side) prices, with
+#  enough evidence attached to review any candidate by hand later.
+
+
+@dataclass(frozen=True)
+class ArbitrageLeg(DataClassJsonMixin):
+    """One side of a complement pair, priced by walking the ask book.
+
+    `vwap_price` is the volume-weighted average price actually required to buy
+    `shares`, not a midpoint or a top-of-book quote. `levels_used` records how
+    deep the fill had to reach — a fill spanning many levels is a warning that
+    the quoted edge depends on thin outer levels.
+
+    side ∈ {"YES", "NO"}
+    """
+    token_id: str
+    side: str
+    shares: float
+    vwap_price: float
+    cost_usd: float
+    levels_used: int
+
+
+@dataclass(frozen=True)
+class ArbitrageOpportunity(DataClassJsonMixin):
+    """One observed complement-pair candidate, executable or rejected.
+
+    Rejected candidates are persisted deliberately: the research question is
+    how often an opportunity exists and how large it is, and that cannot be
+    answered from successes alone.
+
+    reject_reason ∈ {None, "missing_token", "one_sided_book",
+                     "insufficient_yes_depth", "insufficient_no_depth",
+                     "stale_book", "not_profitable", "edge_below_threshold"}
+    """
+    market_id: str
+    question: str | None
+    observed_at_ts: int
+    yes_leg: ArbitrageLeg
+    no_leg: ArbitrageLeg
+    equal_shares: float
+    gross_payout_usd: float
+    gross_cost_usd: float
+    estimated_fees_usd: float
+    estimated_slippage_usd: float
+    net_locked_pnl_usd: float
+    net_edge_bps: float
+    book_age_ms: int | None
+    executable: bool
+    reject_reason: str | None
+    evidence_json: str
+    id: int | None = None
+
+
+@dataclass(frozen=True)
+class ArbitrageScanError(DataClassJsonMixin):
+    """One per-market failure during a scan tick."""
+    market_id: str
+    error_type: str
+    message: str
+
+
+@dataclass
+class ArbitrageScanResult(DataClassJsonMixin):
+    """Per-tick summary returned by ArbitrageScanner.scan_once."""
+    markets_considered: int = 0
+    markets_eligible: int = 0
+    opportunities_found: int = 0
+    executable_opportunities: int = 0
+    errors: int = 0
+    total_executable_notional_usd: float = 0.0
+    error_details: list[ArbitrageScanError] = field(default_factory=list)
+
+
 @dataclass(frozen=True)
 class ReadinessCheck(DataClassJsonMixin):
     """One row of the calibration readiness gate.

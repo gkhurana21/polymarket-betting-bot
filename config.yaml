@@ -220,6 +220,30 @@ risk:                                        # [Phase B]
   duplicate_market_block: true
   bankroll_floor_usd: 100
 
+# ──────────────────────────────────────────────────────────────────────────
+#  Binary complement arbitrage — RESEARCH ONLY (bot/arbitrage_scanner.py)
+#
+#  Hypothesis: 1 YES + 1 NO share pays exactly $1 at resolution, so buying
+#  equal quantities of both for materially less than $1/pair would lock a
+#  return independent of the outcome.
+#
+#  These are deliberately CONSERVATIVE RESEARCH defaults, not execution
+#  settings. The fee and slippage rates are ASSUMPTIONS awaiting validation
+#  (see README) — they are set high on purpose so that anything surviving them
+#  is worth a second look, rather than tuned to make opportunities appear.
+# ──────────────────────────────────────────────────────────────────────────
+arbitrage_scanner:
+  enabled: true
+  scan_limit: 250                  # markets pulled per observation pass
+  max_notional_usd: 25             # cap on a single modelled pair purchase
+  min_shares: 5                    # below this the candidate is noise
+  min_net_edge_bps: 100            # 1.00% net edge required to call it executable
+  estimated_fee_bps_per_leg: 100   # ASSUMPTION — validate before trusting
+  slippage_buffer_bps_per_leg: 50  # safety buffer, applied per leg
+  max_book_age_seconds: 10         # books older than this are not executable
+  require_binary_yes_no: true
+  exclude_closed_or_resolved: true
+
 execution:                                   # [Phase B]
   order_type: GTC
   limit_offset_bps: 5
