@@ -77,6 +77,7 @@
   <h1>Friday <span>· live architecture</span></h1>
   <span class="pill" id="mode">…</span>
   <span class="pill halt" id="halt" hidden>halted</span>
+  <span class="pill halt" id="stall" hidden>loop stopped</span>
   <div class="spacer"></div>
   <div class="kpi" style="margin-right:22px">net p&l<b id="net">$0.00</b></div>
   <div class="kpi" style="margin-right:22px">expected gross<b id="exp">$0.00</b></div>
@@ -371,6 +372,17 @@ async function poll(){
     net.className=d.net.net_usd>0.004?"pos":d.net.net_usd<-0.004?"neg":"";
     document.getElementById("exp").textContent="$"+(d.totals.expected_per_day||0).toFixed(2);
     document.getElementById("halt").hidden=!(d.net.decline_reasons&&d.net.decline_reasons.killed);
+    const sp=document.getElementById("stall"), stalled=d.loop&&d.loop.stalled;
+    if(sp){
+      sp.hidden=!stalled;
+      if(stalled){
+        const a=d.loop.age_s;
+        sp.textContent = "loop stopped · " + (a===null?"never ran":
+          a>3600?(a/3600).toFixed(1)+"h":Math.round(a)+"s");
+      }
+    }
+    // A live-looking graph over a dead loop is the trap; desaturate it.
+    C.style.filter = stalled ? "grayscale(.85) opacity(.5)" : "none";
   }catch(e){ document.getElementById("eps").textContent="—" }
 }
 poll(); setInterval(poll,1200);

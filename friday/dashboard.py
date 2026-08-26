@@ -37,6 +37,14 @@ _MS_PER_DAY = 86_400_000
 # failure mode this project exists to avoid, so the cutoff is deliberate.
 _LIVE_WINDOW_S = 600
 
+# Set by main.py when the quoting loop runs in this process. A dashboard that
+# answers 200 while the loop is dead is worse than one that is simply down: it
+# reports a healthy system that is managing nothing.
+LOOP_ALIVE: dict = {"alive": None}
+
+# No cycle in this long means the loop is not running, whatever the process says.
+_STALL_AFTER_S = 180
+
 
 def build_state(tracker: Tracker, config: dict[str, Any], window_days: float = 5.0) -> dict:
     now = int(time.time() * 1000)
@@ -69,8 +77,18 @@ def build_state(tracker: Tracker, config: dict[str, Any], window_days: float = 5
 
     # Totals reflect only what is live right now, never historical residue.
     quoting = [m for m in markets if m["quoting"] and not m["stale"]]
+    last_cycle = tracker.last_cycle_ts()
+    loop_age = (now - last_cycle) / 1000.0 if last_cycle else None
+    stalled = loop_age is None or loop_age > _STALL_AFTER_S
+
     return {
         "ts": now,
+        "loop": {
+            "alive": LOOP_ALIVE.get("alive"),
+            "age_s": loop_age,
+            "stalled": bool(stalled),
+            "stall_after_s": _STALL_AFTER_S,
+        },
         "dry_run": bool(config.get("dry_run", True)),
         "bankroll": config.get("bankroll_usd"),
         "window_days": window_days,
@@ -139,7 +157,7 @@ def make_handler(tracker: Tracker, config: dict[str, Any]):
                     live = [m for m in state["markets"] if m["age_s"] <= 150]
                     seq, evs = BUS.since(since)
                     body = {"graph": build_graph(live),
-                            "events": evs, "seq": seq,
+                            "events": evs, "seq": seq, "loop": state["loop"],
                             "net": state["net"], "totals": state["totals"],
                             "dry_run": state["dry_run"], "ts": state["ts"]}
                     self._send(200, json.dumps(body).encode(), "application/json")

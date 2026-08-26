@@ -168,6 +168,10 @@ class Tracker:
         return self._conn.execute(
             "SELECT * FROM fills WHERE ts >= ? ORDER BY ts", (since_ms,)).fetchall()
 
+    def last_cycle_ts(self) -> int | None:
+        r = self._conn.execute("SELECT MAX(ts) m FROM quote_cycles").fetchone()
+        return int(r["m"]) if r and r["m"] else None
+
     def latest_cycle_per_market(self, since_ms: int) -> list[sqlite3.Row]:
         """Most recent cycle for each market seen in the window."""
         return self._conn.execute(

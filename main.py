@@ -231,31 +231,56 @@ def cmd_quote(config):
 
 
 def cmd_serve(config):
+    """Continuous quoting loop.
+
+    HARDENED DELIBERATELY. An earlier version left `guard.check` and
+    `scanner.scan` outside the inner try, so a single transient network error
+    raised out of the while loop and killed the thread — while the HTTP server
+    in the main thread carried on answering 200s. The loop died silently and
+    stayed dead for seven days. Live, that is resting orders on the book with
+    nothing re-quoting or cancelling them, which is far worse than not running
+    at all.
+
+    So: nothing in the loop body may propagate. A tick that fails is logged and
+    retried on the next poll; only an explicit halt or shutdown ends the loop.
+    """
     eng = Engine(config)
     interval = float((config.get("scanner") or {}).get("rerank_interval_seconds", 900))
     poll = 30.0
     _log.info("Friday starting — dry_run=%s, top_n=%s",
               eng.dry_run, (config.get("scanner") or {}).get("top_n"))
-    ranked = eng.scanner.scan()
-    selected = eng.scanner.select(ranked, eng.our_shares)
-    last_rank = time.monotonic()
+
+    selected: list = []
+    last_rank = 0.0
+    consecutive_failures = 0
     try:
         while not _SHUTDOWN.is_set():
-            v = eng.guard.check(eng.tracker, eng.realised_pnl)
-            if not v.allowed:
-                _log.error("halted: %s — cancelling and stopping", v.reason)
-                break
-            if time.monotonic() - last_rank >= interval:
-                incumbents = {c.condition_id for c in selected}
-                ranked = eng.scanner.scan()
-                selected = eng.scanner.select(ranked, eng.our_shares, incumbents)
-                last_rank = time.monotonic()
             try:
+                v = eng.guard.check(eng.tracker, eng.realised_pnl)
+                if not v.allowed:
+                    _log.error("halted: %s — cancelling and stopping", v.reason)
+                    break
+
+                # Re-rank on schedule, and whenever we have no selection yet
+                # (covers a failed first scan instead of dying on startup).
+                if not selected or time.monotonic() - last_rank >= interval:
+                    incumbents = {c.condition_id for c in selected}
+                    ranked = eng.scanner.scan()
+                    selected = eng.scanner.select(ranked, eng.our_shares, incumbents)
+                    last_rank = time.monotonic()
+
                 eng.cycle(selected)
+                consecutive_failures = 0
             except Exception as e:
-                _log.error("cycle failed: %s", e, exc_info=True)
+                consecutive_failures += 1
+                _log.error("serve tick failed (%d consecutive): %s",
+                           consecutive_failures, e, exc_info=True)
+                # Back off on a sustained outage rather than hammering the API.
+                if consecutive_failures >= 5:
+                    _SHUTDOWN.wait(min(300.0, poll * consecutive_failures))
             _SHUTDOWN.wait(poll)
     finally:
+        _log.warning("quoting loop exiting")
         eng.shutdown()
 
 
@@ -282,7 +307,17 @@ def cmd_dashboard(config, port: int, with_loop: bool):
     bot = config.get("bot") or {}
     tr = Tracker(bot.get("db_path", "./data/friday.db"))
     if with_loop:
-        threading.Thread(target=cmd_serve, args=(config,), daemon=True).start()
+        def _run():
+            try:
+                cmd_serve(config)
+            except BaseException as e:                 # never die quietly
+                _log.error("quoting loop thread died: %s", e, exc_info=True)
+            finally:
+                dashboard.LOOP_ALIVE["alive"] = False
+                _log.error("quoting loop thread has STOPPED — no orders are "
+                           "being managed")
+        dashboard.LOOP_ALIVE["alive"] = True
+        threading.Thread(target=_run, name="quote-loop", daemon=True).start()
         _log.info("quoting loop started alongside dashboard")
     try:
         dashboard.serve(tr, config, port=port)

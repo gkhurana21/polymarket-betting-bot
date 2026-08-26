@@ -82,6 +82,8 @@
     <span id="updated">connecting…</span>
   </header>
 
+  <div class="note bad" id="stall" hidden style="margin-bottom:16px"></div>
+
   <div class="headline">
     <div class="netrow">
       <div>
@@ -162,6 +164,16 @@ function render(s){
   $("mtm").textContent = money(n.inventory_mtm);
   $("mtm").className = "v " + cls(n.inventory_mtm);
   $("fills").textContent = n.n_fills;
+
+  const st = $("stall");
+  if (s.loop && s.loop.stalled){
+    st.hidden = false;
+    const age = s.loop.age_s === null ? "never" :
+      s.loop.age_s > 3600 ? (s.loop.age_s/3600).toFixed(1)+"h ago" :
+      Math.round(s.loop.age_s)+"s ago";
+    st.textContent = `QUOTING LOOP NOT RUNNING — last cycle ${age}. `
+      + `Nothing is managing orders. Numbers below are historical.`;
+  } else st.hidden = true;
 
   const note = $("projnote");
   if (n.reward_is_projection){
