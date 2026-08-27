@@ -525,6 +525,20 @@ def cmd_arb_scan(config: dict[str, Any]) -> None:
         tracker.close()
 
 
+def cmd_arb_report(config: dict[str, Any], days: int, out: str | None) -> None:
+    """Render a self-contained HTML research report."""
+    from bot.arb_report import write_report
+    db_path, audit_path, _ = _paths(config)
+    tracker = Tracker(db_path=db_path, audit_log_path=audit_path)
+    try:
+        target = Path(out) if out else Path(db_path).parent / "arb_report.html"
+        written = write_report(tracker, config, target, days=days)
+        _console.print(f"\nReport written → [cyan]{written}[/]")
+        _console.print(f"  open with: [dim]open '{written}'[/]")
+    finally:
+        tracker.close()
+
+
 def cmd_arb_status(config: dict[str, Any], days: int) -> None:
     """Summarise recorded complement-arb observations."""
     db_path, audit_path, _ = _paths(config)
@@ -745,6 +759,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("arb-scan", help="One binary-complement arbitrage observation pass (read-only)")
     arb = sub.add_parser("arb-status", help="Summarise recorded arbitrage observations")
     arb.add_argument("--days", type=int, default=7)
+    arep = sub.add_parser("arb-report", help="Render the HTML research report")
+    arep.add_argument("--days", type=int, default=7)
+    arep.add_argument("--out", default=None)
     sub.add_parser("serve", help="Run Phase A daemon (all background loops)")
 
     run = sub.add_parser("run", help="[Phase B] Live trading")
@@ -797,6 +814,8 @@ def main(argv: list[str] | None = None) -> int:
         "backtest": lambda: cmd_backtest(config),
         "arb-scan": lambda: cmd_arb_scan(config),
         "arb-status": lambda: cmd_arb_status(config, days=args.days),
+        "arb-report": lambda: cmd_arb_report(config, days=args.days,
+                                             out=getattr(args, "out", None)),
         "serve": lambda: cmd_serve(config),
         "run": lambda: cmd_run(config),
     }
