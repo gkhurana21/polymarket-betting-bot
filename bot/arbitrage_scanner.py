@@ -46,6 +46,7 @@ README for what needs validating before any of this is trusted.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from bot.client import CircuitBreakerOpen, ClobReadOnlyClient
@@ -122,9 +123,14 @@ def vwap_buy(asks: list[tuple[float, float]], shares: float
         cost += take * px
         remaining -= take
         levels += 1
-    if remaining > 1e-9:
+    # Tolerance must scale with size. Summing level sizes accumulates float
+    # error proportional to the magnitude, so a fixed 1e-9 fails on large
+    # books: a live scan raised "short by 0.000000" on a 3,193,778-share fill
+    # where the true shortfall was ~1e-8 — real error, invisible at 6dp, and
+    # not a genuine depth problem.
+    if remaining > max(1e-9, shares * 1e-12):
         raise ValueError(
-            f"book cannot supply {shares} shares (short by {remaining:.6f})")
+            f"book cannot supply {shares} shares (short by {remaining:.3e})")
     return cost, cost / shares, levels
 
 
@@ -188,6 +194,11 @@ class ArbitrageScanner:
         self._max_book_age_ms = int(float(cfg.get("max_book_age_seconds", 10)) * 1000)
         self._require_binary = bool(cfg.get("require_binary_yes_no", True))
         self._exclude_closed = bool(cfg.get("exclude_closed_or_resolved", True))
+        # Pacing between book fetches. A full pass needs two books per market;
+        # firing 500 requests flat out drew 118 rate-limit failures on the
+        # first live scan, while a paced probe at ~2.3 req/s took 24 of 24
+        # cleanly. Politeness here buys complete data, which is the point.
+        self._request_delay = float(cfg.get("request_delay_seconds", 0.12))
 
     # -- eligibility --------------------------------------------------------
 
@@ -378,8 +389,12 @@ class ArbitrageScanner:
             try:
                 if yes_tok:
                     yes_book = self._client.get_order_book(yes_tok)
+                if self._request_delay:
+                    time.sleep(self._request_delay)
                 if no_tok:
                     no_book = self._client.get_order_book(no_tok)
+                if self._request_delay:
+                    time.sleep(self._request_delay)
             except CircuitBreakerOpen as e:
                 _log.warning("arb-scan: circuit breaker open at %s; ending scan", mid[:16])
                 result.errors += 1

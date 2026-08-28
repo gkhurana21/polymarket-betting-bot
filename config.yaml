@@ -241,6 +241,8 @@ arbitrage_scanner:
   estimated_fee_bps_per_leg: 100   # ASSUMPTION — validate before trusting
   slippage_buffer_bps_per_leg: 50  # safety buffer, applied per leg
   max_book_age_seconds: 10         # books older than this are not executable
+  request_delay_seconds: 0.12      # pacing between book fetches; flat-out
+                                   # requests drew 118 rate-limit failures
   require_binary_yes_no: true
   exclude_closed_or_resolved: true
 

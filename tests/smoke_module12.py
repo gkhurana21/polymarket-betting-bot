@@ -93,6 +93,17 @@ try:
 except ValueError:
     check("over-capacity raises rather than silently partial-filling", True)
 
+# Regression: tolerance must scale with size. A live scan raised
+# "short by 0.000000" on a 3.19M-share fill where float error exceeded a
+# fixed 1e-9 epsilon — a real failure that looked like zero.
+big = [(0.40, 2_000_000.0), (0.41, 1_500_000.0)]
+n_big = max_pair_shares(big, [(0.55, 4_000_000.0)], budget_usd=3_000_000)
+try:
+    cost, vwap, lv = vwap_buy(big, n_big)
+    check(f"large-book fill does not false-fail ({n_big:,.0f} shares)", cost > 0)
+except ValueError as e:
+    check(f"large-book fill does not false-fail — raised {e}", False)
+
 # ── 2. Capacity limited by the weaker book ───────────────────────────────────
 print("\n[2] Equal-share capacity")
 yes_asks = [(0.40, 100.0)]
