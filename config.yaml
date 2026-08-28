@@ -95,6 +95,15 @@ portfolio:
   max_gross_notional_usd: 450      # USD committed to resting quotes (90% of $500)
   max_concurrent_markets: 2        # keep in step with scanner.top_n
 
+# ─── maker rebates ─────────────────────────────────────────────────────────
+#  Polymarket redistributes a share of taker fees to makers whose liquidity
+#  was taken. Requires FILLS — unlike liquidity rewards, which accrue for
+#  merely resting. Category shares 15-25%; taker fee itself is C*rate*p*(1-p).
+rebates:
+  maker_rebate_share: 0.25         # Politics/Finance/most: 25% | Crypto 20% | Sports 15%
+  taker_fee_rate: 0.05
+  markout_lag_snapshots: 3         # snapshots ahead to score a fill against
+
 # ─── guard ─────────────────────────────────────────────────────────────────
 guard:
   news_halt_enabled: false       # pluggable; enable only after base economics
