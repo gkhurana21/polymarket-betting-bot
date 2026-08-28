@@ -238,7 +238,13 @@ arbitrage_scanner:
   max_notional_usd: 25             # cap on a single modelled pair purchase
   min_shares: 5                    # below this the candidate is noise
   min_net_edge_bps: 100            # 1.00% net edge required to call it executable
-  estimated_fee_bps_per_leg: 100   # ASSUMPTION — validate before trusting
+  # RESOLVED from Polymarket docs (was an assumption):
+  #   fee = C x rate x p x (1-p),  charged to TAKERS ONLY, makers pay zero.
+  # Category rates: Crypto 0.07 | Sports 0.05 | Politics/Finance/Tech 0.04
+  #                 Economics/Culture/Weather/Other 0.05 | Geopolitics 0
+  # Both complement legs are takers (we cross the spread), so both pay.
+  taker_fee_rate: 0.05             # common-case category rate
+  estimated_fee_bps_per_leg: 100   # legacy, unused by the fee calculation
   slippage_buffer_bps_per_leg: 50  # safety buffer, applied per leg
   max_book_age_seconds: 10         # books older than this are not executable
   request_delay_seconds: 0.12      # pacing between book fetches; flat-out

@@ -322,32 +322,64 @@ Rejected candidates are stored too, with an explicit reason
 `edge_below_threshold`). The research question is how *often* an edge exists,
 and that cannot be answered from successes alone.
 
-### What to expect
+### Measured result
 
-A prior measurement across 116 liquid markets found `ask(YES) + ask(NO)`
-uniformly equal to **1.0010** — exactly one `minimum_tick_size` above parity, on
-every market checked. Two consequences follow:
+A live scan of **252 markets** produced the following, with zero executable
+candidates:
 
-1. At the touch, the complement pair cost **more** than it pays, before any fees.
-2. VWAP over depth is by construction **≥** the best ask, so walking deeper into
-   the book only raises the cost. **A market that fails at the touch cannot pass
-   at depth.**
+| pair cost = ask_vwap(YES) + ask_vwap(NO) | |
+|---|---|
+| minimum | **1.001000** |
+| median | 1.010000 |
+| maximum | 1.293 |
+| **below $1.00** | **0 / 252** |
 
-So the expected output is overwhelmingly rejections. That is the finding, not a
-malfunction — and it is worth recording rigorously rather than asserting from
-one snapshot.
+The minimum is exactly $1.00 plus one `minimum_tick_size`, across every market
+measured — the mint/merge floor appearing in the data precisely where the
+mechanism says it must.
 
-### Assumptions that need manual validation
+Re-scored with the correct fee formula, the best net edge observed is
+**-130 bps**. Setting the fee to **zero** (as on geopolitics markets) still
+leaves **-110 bps**: the pair already costs more than $1.00 before any fee, so
+no fee assumption can rescue it.
 
-These are **configured guesses**, deliberately conservative. Nothing here has
-been confirmed against a real fill:
+Two structural facts make this a closed question rather than an unlucky sample:
 
-| Assumption | Default | Why it needs checking |
-|---|---|---|
-| `estimated_fee_bps_per_leg` | 100 (1%) | Polymarket's live fill records show **no fee field**, and `maker_base_fee`/`taker_base_fee` on the market object read `1000` with **undocumented units**. The real taker cost is unverified. |
-| `slippage_buffer_bps_per_leg` | 50 (0.5%) | A buffer, not a measurement. True slippage depends on latency between pricing and filling two legs. |
-| **$1.00 pair settlement** | assumed | Not every market settles conventionally. Multi-outcome (`neg_risk`) markets, 50/50-invalid resolutions, and unusual resolution criteria can break the identity. **`evidence_json` stores the full market metadata and question for exactly this reason** — review any candidate by hand before acting. |
-| Two-leg execution risk | not modelled | Filling one leg and missing the other converts a "locked" pair into an outright directional position. This module does not model that risk at all. |
+1. A pair is always obtainable for exactly $1 by splitting USDC, so the book
+   cannot price it below that without being arbitraged against the mint.
+2. VWAP over depth is by construction >= the best ask, so **a market that fails
+   at the touch cannot pass at depth.**
+
+### Cost assumptions — now RESOLVED
+
+The fee rate was previously a guess. It has since been confirmed from
+Polymarket's documentation and verified against their published fee table:
+
+```
+fee = C x feeRate x p x (1 - p)      # C = shares, p = price
+```
+
+* **Takers only. Makers are never charged.** Both legs of a complement pair
+  cross the spread, so both pay.
+* The fee is **not** proportional to notional. It peaks at p=0.5 and vanishes
+  at the extremes, and is symmetric — a trade at 30c costs the same as one at
+  70c. An earlier model here charged `cost x bps`, which overstated the fee on
+  longshots and understated it near even money.
+* Category rates: Crypto 0.07 | Sports 0.05 | Politics/Finance/Tech 0.04 |
+  Economics/Culture/Weather/Other 0.05 | **Geopolitics 0**.
+* The live `/fee-rate` endpoint confirms this per market — it returns
+  `base_fee: 0` for geopolitics markets and non-zero elsewhere.
+
+`smoke_module12` asserts the implementation against the published table at
+p = 0.01, 0.05, 0.50 and 0.95.
+
+**Still unvalidated:**
+
+| Assumption | Why it needs checking |
+|---|---|
+| **$1.00 pair settlement** | Not every market settles conventionally. `neg_risk` multi-outcome markets and 50/50-invalid resolutions can break the identity. `evidence_json` stores full market metadata for hand review. |
+| Two-leg execution risk | Not modelled. Filling one leg and missing the other converts a "locked" pair into an outright directional position. |
+| Slippage buffer | A safety margin, not a measurement. |
 
 ### Usage
 

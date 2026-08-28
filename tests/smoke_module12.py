@@ -144,6 +144,24 @@ check(f"costs applied (fees ${thin.estimated_fees_usd:.4f} + "
       thin.estimated_fees_usd > 0 and thin.estimated_slippage_usd > 0)
 check(f"net rejected after costs ({thin.reject_reason})", not thin.executable)
 
+# ── 4b. Fee formula matches Polymarket's published table ────────────────────
+print("\n[4b] Documented fee formula")
+_s = scanner(taker_fee_rate=0.07)                       # Crypto category rate
+for _p, _want in ((0.01, 0.07), (0.05, 0.33), (0.50, 1.75), (0.95, 0.33)):
+    _got = _s._taker_fee_usd(100, _p)
+    check(f"100 shares @ {_p:.2f} -> ${_got:.2f} (docs ${_want:.2f})",
+          abs(_got - _want) < 0.02)
+check("fee is symmetric about p=0.5",
+      abs(_s._taker_fee_usd(100, 0.30) - _s._taker_fee_usd(100, 0.70)) < 1e-9)
+check("fee is zero at the boundaries",
+      _s._taker_fee_usd(100, 0.0) == 0.0 and _s._taker_fee_usd(100, 1.0) == 0.0)
+check("geopolitics rate 0 -> no fee",
+      scanner(taker_fee_rate=0.0)._taker_fee_usd(100, 0.5) == 0.0)
+# Both legs of a pair cost the same fee, whatever the price — p(1-p) is
+# symmetric, so buying YES at p and NO at (1-p) charges each leg identically.
+check("both complement legs incur equal fees",
+      abs(_s._taker_fee_usd(100, 0.30) - _s._taker_fee_usd(100, 0.70)) < 1e-9)
+
 # ── 5. A genuine opportunity is executable with correct arithmetic ───────────
 print("\n[5] Valid synthetic opportunity")
 opp = scanner().evaluate(
@@ -152,7 +170,10 @@ opp = scanner().evaluate(
 # budget 25 / 0.85 per pair = 29.41 shares
 exp_shares = 25.0 / 0.85
 exp_cost = exp_shares * 0.85
-exp_fees = exp_cost * 100 * 2 / 10_000
+# Polymarket's documented taker fee: C * rate * p * (1-p) per leg, both legs
+# are takers. Verified against the published fee table in test [4b].
+RATE = 0.05
+exp_fees = (exp_shares * RATE * 0.40 * 0.60) + (exp_shares * RATE * 0.45 * 0.55)
 exp_slip = exp_cost * 50 * 2 / 10_000
 exp_pnl = exp_shares - exp_cost - exp_fees - exp_slip
 exp_bps = exp_pnl / exp_cost * 10_000

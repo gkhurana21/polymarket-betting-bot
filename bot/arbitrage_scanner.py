@@ -189,7 +189,11 @@ class ArbitrageScanner:
         self._max_notional = float(cfg.get("max_notional_usd", 25))
         self._min_shares = float(cfg.get("min_shares", 5))
         self._min_edge_bps = float(cfg.get("min_net_edge_bps", 100))
-        self._fee_bps = float(cfg.get("estimated_fee_bps_per_leg", 100))
+        # Documented category taker rates: Crypto 0.07, Sports 0.05,
+        # Politics/Finance/Tech 0.04, Geopolitics 0. Default to the common 0.05
+        # rather than the worst case, now that the real formula is known.
+        self._taker_fee_rate = float(cfg.get("taker_fee_rate", 0.05))
+        self._fee_bps = float(cfg.get("estimated_fee_bps_per_leg", 100))  # legacy, unused
         self._slip_bps = float(cfg.get("slippage_buffer_bps_per_leg", 50))
         self._max_book_age_ms = int(float(cfg.get("max_book_age_seconds", 10)) * 1000)
         self._require_binary = bool(cfg.get("require_binary_yes_no", True))
@@ -199,6 +203,25 @@ class ArbitrageScanner:
         # first live scan, while a paced probe at ~2.3 req/s took 24 of 24
         # cleanly. Politeness here buys complete data, which is the point.
         self._request_delay = float(cfg.get("request_delay_seconds", 0.12))
+
+    def _taker_fee_usd(self, shares: float, price: float) -> float:
+        """Polymarket's documented taker fee: fee = C x rate x p x (1 - p).
+
+        NOT proportional to notional. It peaks at p=0.5 and vanishes at the
+        extremes, and it is symmetric — a trade at 30c costs the same as one at
+        70c. An earlier version here charged `cost x bps`, which overstated the
+        fee on longshots and understated it near even money.
+
+        Both legs of a complement pair are TAKER orders (we cross the spread to
+        buy at the ask), so both pay. Makers are never charged.
+
+        Note the structure: for a pair bought at p and (1-p), each leg's fee is
+        C x rate x p x (1-p) — identical — so the pair fee is exactly twice one
+        leg's, whatever the price.
+        """
+        if not (0.0 < price < 1.0):
+            return 0.0
+        return shares * self._taker_fee_rate * price * (1.0 - price)
 
     # -- eligibility --------------------------------------------------------
 
@@ -267,6 +290,8 @@ class ArbitrageScanner:
                 "yes_asks": normalise_asks(yes_book)[:20],
                 "no_asks": normalise_asks(no_book)[:20],
                 "cost_model": {
+                    "fee_formula": "C * rate * p * (1-p) per leg, takers only",
+                    "taker_fee_rate": self._taker_fee_rate,
                     "fee_bps_per_leg": self._fee_bps,
                     "slippage_bps_per_leg": self._slip_bps,
                     "max_notional_usd": self._max_notional,
@@ -335,7 +360,7 @@ class ArbitrageScanner:
         no_leg = ArbitrageLeg(no_tok, "NO", shares, no_vwap, no_cost, no_levels)
 
         gross_cost = yes_cost + no_cost
-        fees = gross_cost * self._fee_bps * 2 / 10_000
+        fees = self._taker_fee_usd(shares, yes_vwap) + self._taker_fee_usd(shares, no_vwap)
         slippage = gross_cost * self._slip_bps * 2 / 10_000
         payout = shares * _PAIR_PAYOUT_USD
         pnl = payout - gross_cost - fees - slippage
