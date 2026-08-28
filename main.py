@@ -306,6 +306,17 @@ def cmd_dashboard(config, port: int, with_loop: bool):
     from friday import dashboard
     bot = config.get("bot") or {}
     tr = Tracker(bot.get("db_path", "./data/friday.db"))
+    # Bind the port BEFORE starting the loop. Starting the loop first meant a
+    # port conflict (EADDRINUSE) killed the process with a quoting thread
+    # already running and the instance lock already taken — observed live when
+    # a previous instance still held :8440.
+    try:
+        httpd = dashboard.make_server(tr, config, port=port)
+    except OSError as e:
+        _log.error("cannot bind port %d: %s — is another instance running?", port, e)
+        tr.close()
+        return
+
     if with_loop:
         def _run():
             try:
@@ -319,8 +330,10 @@ def cmd_dashboard(config, port: int, with_loop: bool):
         dashboard.LOOP_ALIVE["alive"] = True
         threading.Thread(target=_run, name="quote-loop", daemon=True).start()
         _log.info("quoting loop started alongside dashboard")
+
     try:
-        dashboard.serve(tr, config, port=port)
+        _log.info("dashboard on http://127.0.0.1:%d  (localhost only)", port)
+        httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:

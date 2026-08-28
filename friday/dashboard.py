@@ -182,7 +182,14 @@ def make_handler(tracker: Tracker, config: dict[str, Any]):
     return Handler
 
 
+def make_server(tracker: Tracker, config: dict[str, Any],
+                port: int = 8420) -> ThreadingHTTPServer:
+    """Bind the port. Raises OSError if it is already in use — callers bind
+    BEFORE starting a quoting loop so a conflict cannot orphan one."""
+    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(tracker, config))
+
+
 def serve(tracker: Tracker, config: dict[str, Any], port: int = 8420) -> None:
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(tracker, config))
+    httpd = make_server(tracker, config, port)
     _log.info("dashboard on http://127.0.0.1:%d  (localhost only)", port)
     httpd.serve_forever()
