@@ -237,5 +237,131 @@ def main() -> None:
     print("nothing to do; pass --check or --backfill")
 
 
+
+
+# ────────────────────────────────────────────────────────────────────────────
+#  Scoring, cohort analysis, and the contamination detector
+#
+#  These run on stored forecasts and need no network, so the detector can be
+#  validated against synthetic forecasters BEFORE any API budget is spent.
+#  That ordering is deliberate: the guard is the study. If the detector does
+#  not fire on a known-contaminated model, every number downstream is
+#  unfalsifiable.
+# ────────────────────────────────────────────────────────────────────────────
+
+#  Memorisation and excellence are different magnitudes, and conflating them
+#  cost a test failure: a synthetic forecaster at Brier 0.0406 — extraordinary
+#  but honest — tripped a single 0.05 threshold and would have been discarded
+#  as contaminated. A model reciting known outcomes scores ~0.001, not ~0.04.
+#
+#  So the omniscience test is split. Below HARD, no honest forecaster exists
+#  and the run is unusable. Between HARD and WARN the result is suspicious but
+#  is for a human to judge, not for this script to throw away — it is the one
+#  band where a genuine finding could live.
+#
+#  The threshold cannot simply be deleted in favour of the step test: if the
+#  model's cutoff falls AFTER this corpus it knows every month, there is no
+#  step to detect, and this is the only guard that fires.
+OMNISCIENCE_HARD = 0.02
+OMNISCIENCE_WARN = 0.06
+#  A genuine forecaster degrades smoothly across months. A hard step is the
+#  training cutoff revealing itself.
+STEP_RATIO = 3.0
+#  Self-report is the weakest guard, so its threshold is the loosest.
+SELF_REPORT_RATE = 0.05
+
+
+def cohort_brier(records: list[dict]) -> list[dict]:
+    """Per-month Brier for the model and, on identical items, the market."""
+    by_month: dict[str, list[dict]] = {}
+    for r in records:
+        by_month.setdefault(r["month"], []).append(r)
+    out = []
+    for month in sorted(by_month):
+        rs = by_month[month]
+        out.append(dict(
+            month=month, n=len(rs),
+            model=brier([(r["p_model"], r["y"]) for r in rs]),
+            market=brier([(r["p_market"], r["y"]) for r in rs]),
+            self_reported=sum(1 for r in rs if r.get("known_outcome")) / len(rs),
+        ))
+    return out
+
+
+def detect_contamination(cohorts: list[dict]) -> tuple[bool, list[str], list[str]]:
+    """Return (disqualified, reasons, warnings).
+
+    `reasons` are disqualifying. `warnings` mean a human should look before
+    believing the result — deliberately NOT automatic rejection, because a
+    real finding would land there.
+    """
+    reasons: list[str] = []
+    warnings: list[str] = []
+    if not cohorts:
+        return (False, ["no cohorts"], [])
+
+    for c in cohorts:
+        if c["model"] < OMNISCIENCE_HARD:
+            reasons.append(
+                f"{c['month']}: Brier {c['model']:.4f} < {OMNISCIENCE_HARD} "
+                f"— memorisation, not forecasting "
+                f"(market scores {c['market']:.4f})")
+        elif c["model"] < OMNISCIENCE_WARN:
+            warnings.append(
+                f"{c['month']}: Brier {c['model']:.4f} vs market "
+                f"{c['market']:.4f} — implausibly strong; verify by hand")
+
+    ordered = sorted(cohorts, key=lambda c: c["month"])
+    for a, b in zip(ordered, ordered[1:]):
+        if a["model"] > 0 and b["model"] / max(a["model"], 1e-9) >= STEP_RATIO:
+            reasons.append(
+                f"{a['month']}->{b['month']}: Brier stepped "
+                f"{a['model']:.4f} -> {b['model']:.4f} "
+                f"({b['model'] / a['model']:.1f}x) — looks like a training cutoff")
+
+    total = sum(c["n"] for c in cohorts)
+    claimed = sum(c["self_reported"] * c["n"] for c in cohorts)
+    if total and claimed / total > SELF_REPORT_RATE:
+        reasons.append(
+            f"model self-reported knowing the outcome on "
+            f"{claimed / total * 100:.1f}% of items")
+
+    return (bool(reasons), reasons, warnings)
+
+
+def score_report(records: list[dict]) -> None:
+    """The only comparison that means anything: model vs market, same items."""
+    if not records:
+        print("no forecasts stored")
+        return
+    m = brier([(r["p_model"], r["y"]) for r in records])
+    k = brier([(r["p_market"], r["y"]) for r in records])
+    print(f"\n── Brier on {len(records):,} matched items ──")
+    print(f"  model  {m:.4f}")
+    print(f"  market {k:.4f}")
+    verdict = ("MODEL BEATS MARKET" if m < k else "no edge")
+    print(f"  -> {verdict}  (skill vs market {(1 - m / k) * 100:+.1f}%)")
+
+    print(f"\n── Per-month cohorts ──")
+    cohorts = cohort_brier(records)
+    print(f"{'month':>9} {'n':>6} {'model':>8} {'market':>8} {'self-rep':>9}")
+    for c in cohorts:
+        print(f"{c['month']:>9} {c['n']:>6,} {c['model']:>8.4f} "
+              f"{c['market']:>8.4f} {c['self_reported'] * 100:>8.1f}%")
+
+    flagged, reasons, warnings = detect_contamination(cohorts)
+    print(f"\n── Contamination check ──")
+    if flagged:
+        print("  DISQUALIFIED — results are NOT usable:")
+        for r in reasons:
+            print(f"    * {r}")
+    elif warnings:
+        print("  SUSPICIOUS — verify by hand before believing:")
+        for w in warnings:
+            print(f"    * {w}")
+    else:
+        print("  clean — no memorisation, no step change, low self-report")
+
+
 if __name__ == "__main__":
     main()
