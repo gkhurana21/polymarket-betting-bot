@@ -401,3 +401,16 @@ event per row.
 ## License
 
 See repository license file if present.
+
+### Research: favourite-longshot bias (REJECTED)
+
+`research/longshot_study.py` — read-only study over the 4,552 resolved markets
+with recorded books. Tests whether longshots trade above their realised
+frequency. They do not: realised frequency tracks the executable ask within a
+few points in every bucket. The one candidate that survived a chronological
+split (buy NO at 0.65-0.80, +2.79%) has t=0.91 and flips sign under every
+horizon and time slice. See `research/FINDINGS_longshot.md`.
+
+```bash
+python3 research/longshot_study.py --buffer-hours 6 --max-spread 0.05
+```
