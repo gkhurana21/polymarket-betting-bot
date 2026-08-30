@@ -54,10 +54,17 @@ import sqlite3
 import statistics
 import sys
 import time
+from datetime import datetime, timezone
 import urllib.error
 import urllib.request
 
 GAMMA = "https://gamma-api.polymarket.com/markets"
+#  Gamma cannot filter by condition id. `?condition_ids=` returns [] and
+#  `?condition_id=` SILENTLY IGNORES the filter and returns an unrelated
+#  market -- taking [0] from that would have attached the wrong question to
+#  every one of 4,551 markets and produced an entirely fictitious study.
+#  CLOB's by-id endpoint is authoritative, and the id is re-checked below.
+CLOB_MARKET = "https://clob.polymarket.com/markets/{cid}"
 GEMINI = ("https://generativelanguage.googleapis.com/v1beta/models/"
           "{model}:generateContent")
 
@@ -65,6 +72,20 @@ GEMINI = ("https://generativelanguage.googleapis.com/v1beta/models/"
 # argument, so it cannot land in shell history or a process listing.
 KEY_ENV = "GEMINI_API_KEY"
 KEY_FILE = os.path.expanduser("~/.config/gemini/key")
+
+
+def connect(db: str) -> sqlite3.Connection:
+    """Open the DB tolerant of a concurrent writer.
+
+    The backfill and the forecast runner both write, and a plain connection
+    fails instantly with "database is locked" rather than waiting -- which is
+    exactly what killed the first pilot run mid-flight. WAL lets readers
+    through; busy_timeout is what lets the second WRITER wait its turn.
+    """
+    conn = sqlite3.connect(db, timeout=30.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=120000")
+    return conn
 
 
 def load_api_key() -> str | None:
@@ -113,8 +134,14 @@ def ensure_backfill_table(conn: sqlite3.Connection) -> None:
 
 
 def backfill(db: str, limit: int, delay: float) -> None:
-    """Fetch question + resolution criteria for resolved markets."""
-    conn = sqlite3.connect(db)
+    """Fetch question + resolution criteria for resolved markets.
+
+    Every response is verified to carry the condition id we asked for. A
+    mismatch is discarded, never stored: silently accepting one would poison
+    the entire study with correct-looking questions attached to the wrong
+    outcomes, which is undetectable downstream.
+    """
+    conn = connect(db)
     ensure_backfill_table(conn)
     todo = [r[0] for r in conn.execute("""
         SELECT DISTINCT r.market_id
@@ -124,26 +151,35 @@ def backfill(db: str, limit: int, delay: float) -> None:
         WHERE r.resolved_outcome IN ('YES','NO') AND m.market_id IS NULL
     """).fetchall()][:limit]
 
-    print(f"backfill: {len(todo):,} markets need metadata")
-    ok = fail = 0
+    print(f"backfill: {len(todo):,} markets need metadata", flush=True)
+    ok = fail = mismatch = 0
     for i, mid in enumerate(todo, 1):
-        got = http_json(f"{GAMMA}?condition_ids={mid}")
-        rec = got[0] if isinstance(got, list) and got else None
-        if rec is None:
+        rec = http_json(CLOB_MARKET.format(cid=mid), timeout=25.0)
+        if not isinstance(rec, dict) or not rec.get("question"):
             fail += 1
+        elif rec.get("condition_id") != mid:
+            mismatch += 1          # never store; see docstring
         else:
-            conn.execute("INSERT OR REPLACE INTO market_metadata VALUES (?,?,?,?,?,?)",
-                         (mid, rec.get("question"), rec.get("description"),
-                          rec.get("endDate"), rec.get("category"),
-                          int(time.time() * 1000)))
+            tags = rec.get("tags") or []
+            conn.execute(
+                "INSERT OR REPLACE INTO market_metadata VALUES (?,?,?,?,?,?)",
+                (mid, rec.get("question"), rec.get("description"),
+                 rec.get("end_date_iso"),
+                 ",".join(str(t) for t in tags[:5]) if tags else None,
+                 int(time.time() * 1000)))
             ok += 1
-        if i % 25 == 0:
-            conn.commit()
-            print(f"  {i:,}/{len(todo):,}  ok={ok} fail={fail}", flush=True)
+        # Commit per row. Batching held a write transaction open across ~100
+        # network requests (~60s), which starved any concurrent writer no
+        # matter how large its busy_timeout -- that is what killed the pilot
+        # forecast run twice. Each commit here is tiny; the network dominates.
+        conn.commit()
+        if i % 100 == 0:
+            print(f"  {i:,}/{len(todo):,}  ok={ok} fail={fail} "
+                  f"mismatch={mismatch}", flush=True)
         time.sleep(delay)
     conn.commit()
     conn.close()
-    print(f"backfill done: ok={ok} fail={fail}")
+    print(f"backfill done: ok={ok} fail={fail} mismatch={mismatch}", flush=True)
 
 
 # ── step 2: ask the model ──────────────────────────────────────────────────
@@ -176,15 +212,18 @@ def ask_gemini(key: str, model: str, question: str, description: str,
         # Temperature 0: we want the model's modal estimate, not a sample.
         # A sampled forecast would add variance we would then mistake for
         # model uncertainty.
-        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 300},
+        "generationConfig": {"temperature": 0.0, "maxOutputTokens": 1200},
     }
     url = GEMINI.format(model=model) + f"?key={key}"
     got = http_json(url, body)
     if not got:
         return None
+    # Thinking models return thought parts alongside the answer, and the
+    # answer is not always parts[0]. Take the first part that carries text.
     try:
-        txt = got["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError):
+        parts = got["candidates"][0]["content"]["parts"]
+        txt = next(p["text"] for p in parts if isinstance(p.get("text"), str))
+    except (KeyError, IndexError, TypeError, StopIteration):
         return None
     txt = txt.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
     try:
@@ -198,6 +237,109 @@ def ask_gemini(key: str, model: str, question: str, description: str,
             "why": str(rec.get("why", ""))[:200]}
 
 
+# ── step 3: run forecasts and store them ───────────────────────────────────
+
+def ensure_forecast_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_forecasts (
+            market_id     TEXT,
+            model         TEXT,
+            asof_ts       INTEGER,
+            p_model       REAL,
+            p_market      REAL,
+            y             REAL,
+            month         TEXT,
+            known_outcome INTEGER,
+            why           TEXT,
+            PRIMARY KEY (market_id, model)
+        )""")
+    conn.commit()
+
+
+def forecast_items(db: str, limit: int) -> list[dict]:
+    """Markets that have BOTH backfilled text and an executable book price.
+
+    Uses the earliest qualifying snapshot, matching longshot_study: it is the
+    one a live bot could have acted on first and is furthest from the
+    resolution shadow. The model is asked to forecast as of THAT date.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from longshot_study import load_quotes, one_per_market
+
+    quotes = {q.market_id: q for q in
+              one_per_market(load_quotes(db, 6.0, 0.0, 1e9, 0.05))}
+    conn = connect(db)
+    ensure_forecast_table(conn)
+    done = {r[0] for r in conn.execute(
+        "SELECT market_id FROM llm_forecasts").fetchall()}
+    rows = conn.execute("""
+        SELECT m.market_id, m.question, m.description, m.end_date,
+               r.resolved_outcome, r.resolved_at_ts
+        FROM market_metadata m
+        JOIN resolved_markets r ON r.market_id = m.market_id
+        WHERE m.question IS NOT NULL AND r.resolved_outcome IN ('YES','NO')
+    """).fetchall()
+    conn.close()
+
+    out = []
+    for mid, question, desc, end_date, outcome, res_ts in rows:
+        q = quotes.get(mid)
+        if q is None or mid in done:
+            continue
+        out.append(dict(
+            market_id=mid, question=question, description=desc,
+            end_date=(end_date or "")[:10],
+            asof=datetime.fromtimestamp(q.ts / 1000, timezone.utc).strftime("%Y-%m-%d"),
+            asof_ts=q.ts,
+            p_market=(q.ask_yes + q.bid_yes) / 2,
+            y=1.0 if outcome == "YES" else 0.0,
+            month=datetime.fromtimestamp(res_ts / 1000, timezone.utc).strftime("%Y-%m"),
+        ))
+    return out[:limit]
+
+
+def run_forecasts(db: str, model: str, limit: int, delay: float) -> None:
+    key = load_api_key()
+    if not key:
+        print(f"no API key ({KEY_ENV} or {KEY_FILE})")
+        return
+    items = forecast_items(db, limit)
+    print(f"forecasting {len(items):,} markets with {model}", flush=True)
+    conn = connect(db)
+    ensure_forecast_table(conn)
+    ok = bad = 0
+    for i, it in enumerate(items, 1):
+        r = ask_gemini(key, model, it["question"], it["description"],
+                       it["asof"], it["end_date"])
+        if r is None:
+            bad += 1
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO llm_forecasts VALUES (?,?,?,?,?,?,?,?,?)",
+                (it["market_id"], model, it["asof_ts"], r["p_yes"],
+                 it["p_market"], it["y"], it["month"],
+                 int(r["known_outcome"]), r["why"]))
+            ok += 1
+        conn.commit()          # same reasoning as backfill: never hold a
+        if i % 20 == 0:        # write txn across network I/O
+            print(f"  {i:,}/{len(items):,}  ok={ok} bad={bad}", flush=True)
+        time.sleep(delay)
+    conn.commit()
+    conn.close()
+    print(f"forecasts done: ok={ok} bad={bad}", flush=True)
+
+
+def load_forecasts(db: str, model: str) -> list[dict]:
+    conn = connect(db)
+    ensure_forecast_table(conn)
+    rows = conn.execute(
+        "SELECT p_model,p_market,y,month,known_outcome FROM llm_forecasts "
+        "WHERE model=?", (model,)).fetchall()
+    conn.close()
+    return [dict(p_model=a, p_market=b, y=c, month=d, known_outcome=bool(e))
+            for a, b, c, d, e in rows]
+
+
 def brier(pairs: list[tuple[float, float]]) -> float:
     return statistics.fmean((p - y) ** 2 for p, y in pairs) if pairs else float("nan")
 
@@ -208,7 +350,9 @@ def main() -> None:
     ap.add_argument("--backfill", action="store_true")
     ap.add_argument("--limit", type=int, default=400)
     ap.add_argument("--delay", type=float, default=0.15)
-    ap.add_argument("--model", default="gemini-2.5-pro")
+    ap.add_argument("--model", default="gemini-3.1-pro-preview")
+    ap.add_argument("--forecast", action="store_true")
+    ap.add_argument("--score", action="store_true")
     ap.add_argument("--check", action="store_true",
                     help="verify key + connectivity, make no forecasts")
     args = ap.parse_args()
@@ -220,9 +364,9 @@ def main() -> None:
         print(f"gamma     : {'reachable' if http_json(GAMMA + '?limit=1') else 'BLOCKED'}")
         if key:
             r = ask_gemini(key, args.model, "Will the sun rise tomorrow?",
-                           "Resolves YES if the sun rises.", "2026-08-29", "2026-08-30")
+                           "Resolves YES if the sun rises.", "2026-08-30", "2026-08-31")
             print(f"gemini    : {'reachable — p_yes=' + str(r['p_yes']) if r else 'FAILED'}")
-        conn = sqlite3.connect(args.db)
+        conn = connect(args.db)
         ensure_backfill_table(conn)
         n = conn.execute("SELECT COUNT(*) FROM market_metadata "
                          "WHERE question IS NOT NULL").fetchone()[0]
@@ -234,7 +378,13 @@ def main() -> None:
         backfill(args.db, args.limit, args.delay)
         return
 
-    print("nothing to do; pass --check or --backfill")
+    if args.forecast:
+        run_forecasts(args.db, args.model, args.limit, args.delay)
+        return
+    if args.score:
+        score_report(load_forecasts(args.db, args.model))
+        return
+    print("nothing to do; pass --check, --backfill, --forecast or --score")
 
 
 
