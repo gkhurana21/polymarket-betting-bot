@@ -116,3 +116,33 @@ reconnect:
   max_backoff_seconds: 300
   multiplier: 2.0
   circuit_breaker_consecutive_fails: 5
+
+# ─── thin-market liquidity provision  [research profile] ───────────────────
+#  A DIFFERENT business from the reward strategy above, which FINDINGS.md
+#  rejected (rewards covered 17% of adverse selection). Here the income is the
+#  spread itself: thin markets quote 1.6c median, 15c at p95, against ~0.1c on
+#  liquid books. Measured maker markout on ~10,000 real fills is POSITIVE
+#  (+0.179c at 1h) -- the flow is uninformed, the opposite of what killed the
+#  reward strategy.
+#
+#  Status is NOT REJECTED, not "edge found". The open question is whether we
+#  can actually GET FILLED where somebody else was; markout proves a maker was
+#  there, not that it could be us. That is what paper mode is for.
+thin_scanner:
+  min_volume_24h_usd: 200        # below this the market is dead, not thin
+  max_volume_24h_usd: 10000      # above this we are back in the liquid 3.6%
+                                 # where six hypotheses already died
+  min_spread: 0.006              # under ~0.6c there is nothing to capture
+  max_spread: 0.25               # wider than this is not a market, it is two
+                                 # stub orders around an empty book
+  # THE decisive filter. A maker earns half the spread only if filled on BOTH
+  # sides; filled once, you hold inventory and a directional bet. Measured
+  # imbalance across 83 thin markets: median 38.9%, p75 90.1%, p90 100%.
+  # Only 30 of 83 were round-trippable. This is why most candidates are cut.
+  max_flow_imbalance: 0.20
+  min_recent_trades: 20          # below this the imbalance estimate is noise
+  min_top_depth_shares: 50       # a wide quote with no depth behind it is a
+                                 # stub; stub books fabricated a t=-3.31 once
+  top_n: 4
+  max_markets_scan: 300
+  book_fetch_workers: 6

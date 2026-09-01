@@ -40,6 +40,7 @@ from friday.logger import get_logger, register_secret
 from friday.marketmaker import MarketMaker, Quote
 from friday.postmortem import PostMortem
 from friday.scanner import Scanner
+from friday.thin_scanner import ThinScanner
 from friday.tracker import Tracker
 
 _log = get_logger("friday")
@@ -186,6 +187,31 @@ class Engine:
 
 
 # ─────────────────────────────  commands  ─────────────────────────────
+
+def cmd_thin_scan(config):
+    """Rank THIN markets by spread-capture opportunity, not reward efficiency.
+
+    Prints the flow imbalance for every candidate because that is the number
+    that decides whether the spread is earnable at all -- a market can show a
+    fat spread and still be untradeable if every trade in it is one-directional.
+    """
+    client = build_client(config)
+    sc = ThinScanner(client, config)
+    ranked = sc.scan()
+    if not ranked:
+        print("no thin markets qualify")
+        print("  (most are cut by flow imbalance -- p90 of thin markets is 100% "
+              "one-sided)")
+        return 0
+    print(f"{'spread':>8} {'imbal':>7} {'trades':>7} {'vol/day':>10} "
+          f"{'depth':>8} {'half-sprd':>10}  question")
+    for c in ranked[:25]:
+        print(f"{c.spread*100:>7.2f}c {c.imbalance*100:>6.1f}% {c.trades_seen:>7} "
+              f"${c.volume_24h:>9,.0f} {c.top_depth_shares:>8,.0f} "
+              f"{c.half_spread_available*100:>9.2f}c  {c.question[:44]}")
+    print(f"\n{len(ranked)} qualify; would quote top {len(sc.select(ranked))}")
+    return 0
+
 
 def cmd_scan(config):
     client = ClobReadOnlyClient()
@@ -361,6 +387,7 @@ def main(argv=None) -> int:
     p.add_argument("--config", default=str(Path(__file__).parent / "config.yaml"))
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("scan", help="rank markets by reward efficiency")
+    sub.add_parser("thin-scan", help="rank THIN markets by spread capture")
     sub.add_parser("quote", help="one quote cycle")
     sub.add_parser("serve", help="continuous quoting loop")
     rp = sub.add_parser("report", help="net-PnL post-mortem")
@@ -400,6 +427,7 @@ def main(argv=None) -> int:
 
 def _dispatch(args, config) -> int:
     {"scan": lambda: cmd_scan(config),
+     "thin-scan": lambda: cmd_thin_scan(config),
      "quote": lambda: cmd_quote(config),
      "serve": lambda: cmd_serve(config),
      "report": lambda: cmd_report(config, args.days),
