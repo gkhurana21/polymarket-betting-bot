@@ -116,3 +116,84 @@ The infrastructure is sound. The hypothesis is not.
 
 * `dry_run: true` throughout. No `PRIVATE_KEY`. No wallet funded.
 * 8 test suites pass.
+
+---
+
+# Addendum — Thin-Market Liquidity Provision (hypothesis 8)
+
+**Status: REJECTED, on the joint constraint rather than on markout.**
+
+Run 2026-09-01. Real money risked: **$0**. Code: `friday/thin_scanner.py`.
+
+## What was genuinely new
+
+The reward strategy above died because liquidity rewards covered 17% of
+adverse selection. Thin markets ($200-$10k/day) are a different business: the
+spread is 1.6c median and 15c at p95 versus ~0.1c on liquid books, so the
+income is the SPREAD, not rewards.
+
+Measured on ~10,000 real fills across 89 markets, **maker markout is positive**
+(+0.179c at 1h, holding at 6h and 24h). Flow in obscure thin markets is
+genuinely uninformed — the opposite of what killed the reward strategy. Paired
+per-market, 81 of 83 markets showed positive net per fill.
+
+That finding stands. It is the only positive measurement in eight hypotheses.
+
+## What killed it
+
+A live scan of 300 open markets returned **8 qualifying** on spread, balanced
+flow, trade count and depth. Their median spread is **1.00c** — not the 1.6c
+median or 15c p95 that motivated the work. Every fat-spread market was cut by
+the flow-imbalance gate.
+
+That is not a filter artifact, it is the mechanism:
+
+> **Balanced flow and wide spreads are mutually exclusive.** Two-sided flow
+> means active participation means competitive quoting means tight spreads. A
+> 35c spread exists precisely *because* nobody trades that market.
+
+Modelled economics on the 8, resting 200 shares:
+
+| spread | depth | our share of book | $/day |
+|---|---|---|---|
+| 3.00c | 88 | **69.4%** | $11.37 |
+| 1.00c | 62 | **76.3%** | $5.71 |
+| 1.00c | 23,165 | 0.9% | $0.21 |
+| 1.00c | 28,162 | 0.7% | $0.02 |
+
+**$19.11/day total, but $17.08 of it (89%) comes from the two markets where we
+would be 70-76% of the book.** `Scanner.viable()` already refuses those, and
+its docstring says why: *"every fill we get is someone hitting the only bid
+available, and there is no other liquidity to exit against. That is adverse
+selection by construction, and no toxicity parameter rescues it."*
+
+Excluding them: **$2.03/day on ~$1,200 of capital**, across 6 markets.
+
+## The joint constraint
+
+Three requirements that do not co-occur:
+
+1. **Wide spread** — requires an inactive market
+2. **Balanced flow** — requires an active market
+3. **Fillable queue position** — requires a thin book, but a thin book means
+   we *become* the book
+
+(1) and (2) are in direct opposition. Where (3) is satisfiable, Friday's own
+safety rule correctly forbids trading. 8 of 300 markets qualified at all, so
+the universe is too small to scale even if the per-market economics worked.
+
+## Bugs caught building this
+
+**Wired to the wrong universe.** `ThinScanner` initially called
+`client.get_active_markets()`, which uses CLOB sampling-markets — by its own
+docstring, "only those currently sampled for liquidity rewards", i.e. the
+LIQUID markets. A thin-market scanner pointed at a source that structurally
+excludes thin markets. This is the same error that scoped six earlier
+hypotheses to the liquid 3.6% of the venue, reintroduced within an hour of
+diagnosing it, by reusing a convenient helper. Had the VPN been up it would
+have failed in the worst way available: returning liquid markets and looking
+like it worked. Now fetches the open universe from Gamma.
+
+**A silently no-matching patch.** An edit adding the CLI dispatch entry did not
+match and did not error, so the command registered in the parser with nowhere
+to route. Same failure shape as the data bugs, in edit form.
