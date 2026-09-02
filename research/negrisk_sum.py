@@ -56,8 +56,17 @@ for i,slug in enumerate(sorted(slugs),1):   # all events, not the first 70
     if not (isinstance(ev,list) and ev): skipped+=1; continue
     mks=ev[0].get('markets') or []
     live=[m for m in mks if not m.get('closed') and m.get('clobTokenIds')]
-    # COMPLETENESS GATE: every live leg must price, or we do not score the set
-    if len(live)<3: skipped+=1; continue
+    # COMPLETENESS GATE, corrected. Requiring only that every LIVE leg prices
+    # was not enough: an event with 6 markets of which 3 are closed passed the
+    # gate on 3 legs, and buying 3 legs of a 6-leg exhaustive set guarantees
+    # nothing -- the winner may be one of the three skipped. That produced the
+    # only "profitable" hit in two consecutive scans, both spurious, and is the
+    # same subset assumption that caused the retracted +62% Nobel artifact.
+    #
+    # A closed leg is only safe to ignore if it resolved NO. Gamma does not
+    # reliably expose that here, so the conservative rule is: score an event
+    # only when EVERY market in it is still live.
+    if len(live)<3 or len(live)!=len(mks): skipped+=1; continue
     tot=fee=0.0; sizes=[]; ok=True
     for m in live:
         try: tok=json.loads(m['clobTokenIds'])[0]
