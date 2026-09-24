@@ -65,8 +65,21 @@ news, polls, reporting. Be calibrated, not cautious: if the evidence points
 strongly one way, say so.
 
 Reply with STRICT JSON only:
-{{"p_yes": <float 0..1>, "key_fact": "<the single most decisive thing you
-found, 25 words max>"}}"""
+{{"today": "<today's date as YYYY-MM-DD, from your search>",
+  "p_yes": <float 0..1>,
+  "key_fact": "<the single most decisive thing you found, 25 words max>"}}"""
+
+# CANARY. `groundingMetadata` is NOT returned when the output is
+# JSON-constrained, so the API cannot tell us per-call whether search fired --
+# the first run flagged all 124 forecasts "ungrounded" while they were in fact
+# grounded. Verified directly: with the search tool and JSON output the model
+# returns today's real date and a current BTC price; without the tool it
+# returns 2024-05-24 and a stale price.
+#
+# So grounding is checked by asking for today's date inside the same JSON. A
+# model answering from training data cannot know it. Any forecast whose canary
+# is wrong is an UNGROUNDED forecast -- i.e. the stale model already rejected
+# at Brier 0.1571 -- and must not be scored as retrieval.
 
 
 def load_key() -> str | None:
@@ -111,8 +124,10 @@ def ask(key: str, q: str, desc: str, end: str) -> dict | None:
         return None
     if not (0.0 <= p <= 1.0):
         return None
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    canary_ok = str(rec.get("today", "")).strip() == today
     return {"p_yes": p, "key_fact": str(rec.get("key_fact", ""))[:240],
-            "grounded": grounded}
+            "grounded": canary_ok or grounded, "canary": canary_ok}
 
 
 def ensure(conn):
