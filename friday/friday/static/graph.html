@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Friday — live architecture</title>
+<style>
+  :root{
+    --bg:#080a0f; --panel:rgba(18,23,32,.86); --line:#232b38;
+    --fg:#e6edf3; --dim:#8b949e; --dimmer:#5c6673;
+    --venue:#c9a227; --core:#58a6ff; --signal:#a371f7; --maker:#3fb950; --leg:#39c5cf;
+    --pos:#3fb950; --neg:#f85149; --warn:#d29922;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--fg);
+    font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  canvas{display:block;position:fixed;top:0;left:0;width:100%;height:100%}
+
+  .hud{position:fixed;pointer-events:none;z-index:5}
+  #top{top:0;left:0;right:0;padding:16px 20px;display:flex;gap:14px;align-items:center;
+       background:linear-gradient(180deg,rgba(8,10,15,.95),rgba(8,10,15,0))}
+  h1{font-size:16px;margin:0;letter-spacing:.3px}
+  h1 span{color:var(--dimmer);font-weight:400}
+  .pill{font:10px/1 var(--mono);padding:5px 9px;border-radius:99px;border:1px solid var(--line);
+        color:var(--dim);text-transform:uppercase;letter-spacing:.6px;background:rgba(18,23,32,.8)}
+  .pill.paper{color:var(--core);border-color:#1f3b5c}
+  .pill.live{color:var(--warn);border-color:#5a4708}
+  .pill.halt{color:var(--neg);border-color:#5c2422;background:#2d1210}
+  .spacer{flex:1}
+  .kpi{text-align:right;font:11px var(--mono);color:var(--dimmer)}
+  .kpi b{display:block;font-size:17px;color:var(--fg);font-weight:600}
+  .kpi b.pos{color:var(--pos)} .kpi b.neg{color:var(--neg)}
+
+  #legend{bottom:16px;left:20px;display:flex;gap:14px;flex-wrap:wrap;
+          background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;
+          backdrop-filter:blur(8px)}
+  .lg{display:flex;align-items:center;gap:6px;font:10px var(--mono);color:var(--dim);
+      text-transform:uppercase;letter-spacing:.5px}
+  .dot{width:9px;height:9px;border-radius:50%}
+
+  #inspect{top:64px;right:20px;width:280px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:14px 16px;backdrop-filter:blur(10px);pointer-events:auto;display:none}
+  #inspect h3{margin:0 0 2px;font-size:13px}
+  #inspect .sub{font:10px var(--mono);color:var(--dimmer);text-transform:uppercase;
+                letter-spacing:.6px;margin-bottom:10px}
+  #inspect table{width:100%;border-collapse:collapse;font:11px var(--mono)}
+  #inspect td{padding:3px 0;vertical-align:top}
+  #inspect td:first-child{color:var(--dimmer);padding-right:10px;white-space:nowrap}
+  #inspect td:last-child{text-align:right;color:var(--fg)}
+  #close{position:absolute;top:10px;right:12px;cursor:pointer;color:var(--dimmer);font-size:15px}
+  #close:hover{color:var(--fg)}
+
+  #feed{bottom:16px;right:20px;width:290px;max-height:210px;overflow:hidden;
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+    backdrop-filter:blur(8px)}
+  #feed .h{font:10px var(--mono);color:var(--dimmer);text-transform:uppercase;
+           letter-spacing:.6px;margin-bottom:7px}
+  .ev{font:10px var(--mono);color:var(--dim);white-space:nowrap;overflow:hidden;
+      text-overflow:ellipsis;padding:1.5px 0;opacity:.95}
+  .ev b{color:var(--fg);font-weight:500}
+  .ev.k-order{color:var(--leg)} .ev.k-standdown{color:var(--warn)}
+  .ev.k-halt{color:var(--neg)} .ev.k-select{color:var(--maker)}
+  .hint{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);font:10px var(--mono);
+        color:var(--dimmer);z-index:4;pointer-events:none}
+  a.sw{position:fixed;top:18px;right:20px;z-index:6;font:10px var(--mono);color:var(--dim);
+       text-decoration:none;border:1px solid var(--line);padding:5px 10px;border-radius:99px;
+       background:rgba(18,23,32,.8)}
+  a.sw:hover{color:var(--fg);border-color:var(--core)}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<a class="sw" href="/">table view →</a>
+
+<div class="hud" id="top">
+  <h1>Friday <span>· live architecture</span></h1>
+  <span class="pill" id="mode">…</span>
+  <span class="pill halt" id="halt" hidden>halted</span>
+  <span class="pill halt" id="stall" hidden>loop stopped</span>
+  <div class="spacer"></div>
+  <div class="kpi" style="margin-right:22px">net p&l<b id="net">$0.00</b></div>
+  <div class="kpi" style="margin-right:22px">expected gross<b id="exp">$0.00</b></div>
+  <div class="kpi">events/s<b id="eps">0</b></div>
+</div>
+
+<div class="hud" id="legend">
+  <div class="lg"><span class="dot" style="background:var(--venue)"></span>venue</div>
+  <div class="lg"><span class="dot" style="background:var(--core)"></span>core</div>
+  <div class="lg"><span class="dot" style="background:var(--signal)"></span>signal</div>
+  <div class="lg"><span class="dot" style="background:var(--maker)"></span>maker</div>
+  <div class="lg"><span class="dot" style="background:var(--leg)"></span>order leg</div>
+</div>
+
+<div class="hud" id="inspect"><span id="close">×</span>
+  <h3 id="i-title"></h3><div class="sub" id="i-sub"></div>
+  <table id="i-body"></table>
+</div>
+
+<div class="hud" id="feed"><div class="h">message feed</div><div id="evs"></div></div>
+<div class="hint">drag nodes · scroll to zoom · click to inspect</div>
+
+<script>
+const C = document.getElementById("c"), X = C.getContext("2d");
+let W=0,H=0,DPR=1;
+function resize(){
+  DPR=Math.min(devicePixelRatio||1,2); W=innerWidth; H=innerHeight;
+  // Backing store is DPR-scaled for sharpness; the CSS size MUST be pinned to
+  // the viewport or the canvas renders at its intrinsic (2x) size and only the
+  // top-left quadrant is visible.
+  C.width=W*DPR; C.height=H*DPR;
+  C.style.width=W+"px"; C.style.height=H+"px";
+  X.setTransform(DPR,0,0,DPR,0,0);
+}
+addEventListener("resize",()=>{resize(); layoutTargets();}); resize();
+
+const COL={venue:"#c9a227",core:"#58a6ff",signal:"#a371f7",maker:"#3fb950",leg:"#39c5cf"};
+const nodes=new Map(), edges=new Map();
+let pulses=[], lastSeq=0, view={x:0,y:0,k:1}, drag=null, hover=null, sel=null;
+let epsWin=[];
+
+// ---- layout: layered columns, force-relaxed within each column -------------
+function layoutTargets(){
+  const depths=[...new Set([...nodes.values()].map(n=>n.depth))].sort((a,b)=>a-b);
+  // Keep clear of the header and the legend/feed strips.
+  const top=120, bot=Math.max(top+120, H-130);
+  // The feed panel occupies the right strip; laying nodes under it hides them.
+  const padL=120, padR=W>900 ? 330 : 120;
+  const spanX=Math.max(W-padL-padR, 380), maxD=depths[depths.length-1]||1;
+  depths.forEach(d=>{
+    const col=[...nodes.values()].filter(n=>n.depth===d);
+    const x = padL + (maxD ? spanX*(d/maxD) : spanX/2);
+    const gap = Math.min(92, (bot-top)/(col.length+0.6));
+    col.forEach((n,i)=>{
+      // Alternate a small x-offset in dense columns: labels sit below nodes,
+      // so a pure vertical stack collides text with the node beneath it.
+      n.tx = x + (col.length>3 ? ((i%2)?34:-34) : 0);
+      n.ty = (top+bot)/2 + (i-(col.length-1)/2)*gap;
+    });
+  });
+}
+
+function step(){
+  // spring to layered target
+  for(const n of nodes.values()){
+    if(n===drag) continue;
+    n.vx += (n.tx-n.x)*0.055; n.vy += (n.ty-n.y)*0.055;
+  }
+  // pairwise repulsion so labels don't collide
+  const arr=[...nodes.values()];
+  for(let i=0;i<arr.length;i++) for(let j=i+1;j<arr.length;j++){
+    const a=arr[i],b=arr[j]; let dx=b.x-a.x, dy=b.y-a.y;
+    let d2=dx*dx+dy*dy; if(d2<1) d2=1;
+    const d=Math.sqrt(d2); if(d>150) continue;
+    const f=Math.min(2.2, 260/d2), fx=dx/d*f, fy=dy/d*f;
+    if(a!==drag){a.vx-=fx;a.vy-=fy} if(b!==drag){b.vx+=fx;b.vy+=fy}
+  }
+  // edge springs
+  for(const e of edges.values()){
+    const a=nodes.get(e.src), b=nodes.get(e.dst); if(!a||!b) continue;
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1;
+    const f=(d-165)*0.0009, fx=dx/d*f, fy=dy/d*f;
+    if(a!==drag){a.vx+=fx;a.vy+=fy} if(b!==drag){b.vx-=fx;b.vy-=fy}
+  }
+  for(const n of nodes.values()){
+    if(n===drag){n.vx=n.vy=0;continue}
+    n.vx*=0.80; n.vy*=0.80; n.x+=n.vx; n.y+=n.vy;
+    // Soft bounds: a node that drifts off-canvas is invisible and useless.
+    n.x=Math.max(60,Math.min(W-60,n.x)); n.y=Math.max(96,Math.min(H-96,n.y));
+    n.glow*=0.94;
+  }
+  for(const e of edges.values()) e.glow*=0.93;
+  pulses=pulses.filter(p=>(p.t+=p.sp)<1);
+}
+
+const sx=x=>x*view.k+view.x, sy=y=>y*view.k+view.y;
+
+function draw(){
+  X.clearRect(0,0,W,H);
+  // faint grid
+  X.strokeStyle="rgba(255,255,255,.022)"; X.lineWidth=1;
+  const g=46*view.k;
+  if(g>12){ for(let x=view.x%g;x<W;x+=g){X.beginPath();X.moveTo(x,0);X.lineTo(x,H);X.stroke()}
+            for(let y=view.y%g;y<H;y+=g){X.beginPath();X.moveTo(0,y);X.lineTo(W,y);X.stroke()} }
+
+  // edges
+  for(const e of edges.values()){
+    const a=nodes.get(e.src), b=nodes.get(e.dst); if(!a||!b) continue;
+    const dim = sel && sel!==e.src && sel!==e.dst;
+    X.strokeStyle = e.glow>0.05
+      ? `rgba(120,180,255,${Math.min(.75,.18+e.glow*.6)})`
+      : (dim?"rgba(255,255,255,.03)":"rgba(255,255,255,.075)");
+    X.lineWidth = (e.glow>0.05? 1.8 : 1) * Math.max(.6,view.k);
+    X.beginPath(); X.moveTo(sx(a.x),sy(a.y)); X.lineTo(sx(b.x),sy(b.y)); X.stroke();
+  }
+  // pulses
+  for(const p of pulses){
+    const a=nodes.get(p.src), b=nodes.get(p.dst); if(!a||!b) continue;
+    const t=p.t, x=sx(a.x+(b.x-a.x)*t), y=sy(a.y+(b.y-a.y)*t);
+    const r=(p.kind==="halt"?4.5:3)*Math.max(.7,view.k);
+    X.beginPath(); X.arc(x,y,r,0,7); X.fillStyle=p.col; X.fill();
+    X.beginPath(); X.arc(x,y,r*3.2,0,7);
+    X.fillStyle=p.col.replace("rgb","rgba").replace(")",",.13)"); X.fill();
+  }
+  // nodes
+  for(const n of nodes.values()){
+    const col=COL[n.kind]||"#8b949e";
+    const dim = sel && sel!==n.id && !isNeighbour(sel,n.id);
+    const R=(n.kind==="venue"?17:n.kind==="maker"?15:11)*Math.max(.7,view.k);
+    const x=sx(n.x), y=sy(n.y);
+    if(n.glow>0.03){
+      X.beginPath(); X.arc(x,y,R+n.glow*17,0,7);
+      X.fillStyle=hex2rgba(col,.13*n.glow); X.fill();
+    }
+    if(n.state && n.state.halted){ X.strokeStyle="#f85149"; X.lineWidth=2;
+      X.beginPath(); X.arc(x,y,R+5,0,7); X.stroke(); }
+    if(n.state && n.state.quoting===false){
+      X.setLineDash([3,3]); X.strokeStyle="#d29922"; X.lineWidth=1.5;
+      X.beginPath(); X.arc(x,y,R+4,0,7); X.stroke(); X.setLineDash([]);
+    }
+    X.beginPath(); X.arc(x,y,R,0,7);
+    X.fillStyle = dim? hex2rgba(col,.22) : hex2rgba(col,.92); X.fill();
+    X.strokeStyle = hover===n.id||sel===n.id ? "#fff" : hex2rgba(col,.5);
+    X.lineWidth = hover===n.id||sel===n.id ? 2 : 1; X.stroke();
+
+    if(view.k>0.55){
+      X.fillStyle = dim? "rgba(230,237,243,.25)" : "#e6edf3";
+      X.font=`${Math.round(11*Math.max(.85,view.k))}px -apple-system,sans-serif`;
+      X.textAlign="center";
+      X.fillText(n.label, x, y+R+14);
+      if(n.sub && view.k>0.85){
+        X.fillStyle= dim? "rgba(139,148,158,.2)":"rgba(139,148,158,.75)";
+        X.font=`${Math.round(9*view.k)}px ui-monospace,monospace`;
+        X.fillText(n.sub, x, y+R+26);
+      }
+    }
+  }
+}
+function hex2rgba(h,a){const n=parseInt(h.slice(1),16);
+  return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`}
+function isNeighbour(id,other){
+  for(const e of edges.values())
+    if((e.src===id&&e.dst===other)||(e.dst===id&&e.src===other)) return true;
+  return false;
+}
+function loop(){
+  // Self-correcting: relying on the resize event alone leaves a stale backing
+  // store (CSS stretches the canvas, coordinates drift off-screen). Checking
+  // each frame is cheap and cannot desync.
+  if(innerWidth!==W || innerHeight!==H){ resize(); layoutTargets(); }
+  step(); draw(); requestAnimationFrame(loop);
+} loop();
+
+// ---- interaction -----------------------------------------------------------
+function pick(mx,my){
+  let best=null,bd=1e9;
+  for(const n of nodes.values()){
+    const d=Math.hypot(sx(n.x)-mx, sy(n.y)-my);
+    if(d<24*Math.max(.7,view.k)&&d<bd){bd=d;best=n}
+  }
+  return best;
+}
+C.addEventListener("mousemove",e=>{
+  if(drag){ drag.x=(e.clientX-view.x)/view.k; drag.y=(e.clientY-view.y)/view.k; return }
+  if(panning){ view.x=e.clientX-panning.x; view.y=e.clientY-panning.y; return }
+  const n=pick(e.clientX,e.clientY); hover=n?n.id:null;
+  C.style.cursor=n?"pointer":(panning?"grabbing":"grab");
+});
+let panning=null;
+C.addEventListener("mousedown",e=>{
+  const n=pick(e.clientX,e.clientY);
+  if(n) drag=n; else panning={x:e.clientX-view.x,y:e.clientY-view.y};
+});
+addEventListener("mouseup",e=>{
+  if(drag&&Math.abs(drag.vx)<2){ select(drag.id) }
+  else if(!drag&&panning){ const n=pick(e.clientX,e.clientY); if(!n) select(null) }
+  drag=null; panning=null;
+});
+C.addEventListener("wheel",e=>{
+  e.preventDefault();
+  const k=Math.max(.35,Math.min(2.4,view.k*(e.deltaY<0?1.11:0.9)));
+  view.x=e.clientX-(e.clientX-view.x)*(k/view.k);
+  view.y=e.clientY-(e.clientY-view.y)*(k/view.k);
+  view.k=k;
+},{passive:false});
+document.getElementById("close").onclick=()=>select(null);
+
+function select(id){
+  sel=id; const box=document.getElementById("inspect");
+  if(!id){ box.style.display="none"; return }
+  const n=nodes.get(id); if(!n){box.style.display="none";return}
+  document.getElementById("i-title").textContent=n.label;
+  document.getElementById("i-sub").textContent=`${n.kind} · ${n.layer}`;
+  const s=n.state||{};
+  const rows=Object.entries(s).filter(([k,v])=>v!==null&&v!==undefined)
+    .map(([k,v])=>`<tr><td>${k}</td><td>${typeof v==="number"?(+v).toFixed(
+      Math.abs(v)<1&&v!==0?4:2):String(v)}</td></tr>`).join("");
+  document.getElementById("i-body").innerHTML=rows||`<tr><td colspan=2 style="color:var(--dimmer)">no state yet</td></tr>`;
+  box.style.display="block";
+}
+
+// ---- data ------------------------------------------------------------------
+const EVCOL={order:"rgb(57,197,207)",book:"rgb(201,162,39)",fair:"rgb(163,113,247)",
+  tox:"rgb(163,113,247)",select:"rgb(63,185,80)",record:"rgb(88,166,255)",
+  check:"rgb(88,166,255)",halt:"rgb(248,81,73)",standdown:"rgb(210,153,34)",
+  quote:"rgb(63,185,80)",cancel:"rgb(248,81,73)"};
+
+function sync(g){
+  const seen=new Set();
+  for(const nd of g.nodes){
+    seen.add(nd.id);
+    let n=nodes.get(nd.id);
+    if(!n){ n={...nd, x:W/2, y:H/2, vx:0,vy:0, tx:W/2, ty:H/2, glow:0, fresh:true};
+            nodes.set(nd.id,n); }
+    else Object.assign(n,{label:nd.label,sub:nd.sub,kind:nd.kind,layer:nd.layer,
+                          depth:nd.depth,state:nd.state});
+  }
+  for(const id of [...nodes.keys()]) if(!seen.has(id)) nodes.delete(id);
+  const ek=new Set();
+  for(const e of g.edges){
+    const k=e.src+">"+e.dst; ek.add(k);
+    if(!edges.has(k)) edges.set(k,{...e,glow:0});
+  }
+  for(const k of [...edges.keys()]) if(!ek.has(k)) edges.delete(k);
+  layoutTargets();
+  for(const n of nodes.values()){
+    if(n.fresh){ n.x=n.tx+(Math.random()-.5)*24; n.y=n.ty+(Math.random()-.5)*24;
+                 n.fresh=false; }
+  }
+}
+
+function applyEvents(evs){
+  const feed=document.getElementById("evs");
+  for(const ev of evs){
+    const a=nodes.get(ev.src);
+    let dsts = ev.dst==="broadcast" ? [...nodes.keys()].filter(k=>k.startsWith("mm:")) : [ev.dst];
+    for(const d of dsts){
+      const b=nodes.get(d); if(!a||!b) continue;
+      const k=ev.src+">"+d; const e=edges.get(k); if(e) e.glow=1;
+      a.glow=1; b.glow=Math.max(b.glow,.75);
+      pulses.push({src:ev.src,dst:d,t:0,sp:0.028+Math.random()*0.012,
+                   kind:ev.kind,col:EVCOL[ev.kind]||"rgb(139,148,158)"});
+    }
+    epsWin.push(Date.now());
+  }
+  if(evs.length){
+    const html=evs.slice(-14).reverse().map(ev=>{
+      const p=ev.payload||{}, bits=Object.entries(p).slice(0,2)
+        .map(([k,v])=>`${k}=${typeof v==="number"?(+v).toFixed(Math.abs(v)<1&&v!==0?4:2):v}`).join(" ");
+      return `<div class="ev k-${ev.kind}"><b>${ev.kind}</b> ${short(ev.src)}→${short(ev.dst)} ${bits}</div>`;
+    }).join("");
+    feed.innerHTML = html + feed.innerHTML;
+    while(feed.childElementCount>26) feed.removeChild(feed.lastChild);
+  }
+  const cut=Date.now()-3000; epsWin=epsWin.filter(t=>t>cut);
+  document.getElementById("eps").textContent=(epsWin.length/3).toFixed(1);
+}
+const short=s=>String(s).replace(/^(mm|mark|tox|leg):0x[0-9a-f]{0,8}[0-9a-f]*/i,(m,p)=>p)
+                        .replace(/:0x[0-9a-f]+/i,"").slice(0,16);
+
+async function poll(){
+  try{
+    const r=await fetch("/api/graph?since="+lastSeq);
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const d=await r.json();
+    sync(d.graph); applyEvents(d.events||[]); lastSeq=d.seq;
+    const mode=document.getElementById("mode");
+    mode.textContent=d.dry_run?"paper · dry-run":"live capital";
+    mode.className="pill "+(d.dry_run?"paper":"live");
+    const net=document.getElementById("net");
+    net.textContent=(d.net.net_usd<0?"-$":"+$")+Math.abs(d.net.net_usd).toFixed(2);
+    net.className=d.net.net_usd>0.004?"pos":d.net.net_usd<-0.004?"neg":"";
+    document.getElementById("exp").textContent="$"+(d.totals.expected_per_day||0).toFixed(2);
+    document.getElementById("halt").hidden=!(d.net.decline_reasons&&d.net.decline_reasons.killed);
+    const sp=document.getElementById("stall"), stalled=d.loop&&d.loop.stalled;
+    if(sp){
+      sp.hidden=!stalled;
+      if(stalled){
+        const a=d.loop.age_s;
+        sp.textContent = "loop stopped · " + (a===null?"never ran":
+          a>3600?(a/3600).toFixed(1)+"h":Math.round(a)+"s");
+      }
+    }
+    // A live-looking graph over a dead loop is the trap; desaturate it.
+    C.style.filter = stalled ? "grayscale(.85) opacity(.5)" : "none";
+  }catch(e){ document.getElementById("eps").textContent="—" }
+}
+poll(); setInterval(poll,1200);
+</script>
+</body>
+</html>

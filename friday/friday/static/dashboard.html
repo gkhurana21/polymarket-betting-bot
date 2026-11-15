@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Friday — liquidity rewards MM</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c222b; --line:#2a313c;
+    --fg:#e6edf3; --dim:#8b949e; --dimmer:#6e7681;
+    --pos:#3fb950; --neg:#f85149; --warn:#d29922; --accent:#58a6ff;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 20px 60px}
+
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+  h1{font-size:19px;margin:0;letter-spacing:.3px}
+  h1 span{color:var(--dimmer);font-weight:400}
+  .pill{font:11px/1 var(--mono);padding:5px 9px;border-radius:99px;
+        border:1px solid var(--line);color:var(--dim);text-transform:uppercase;letter-spacing:.6px}
+  .pill.live{color:var(--warn);border-color:#5a4708;background:#2a2109}
+  .pill.paper{color:var(--accent);border-color:#1f3b5c;background:#0f2033}
+  .pill.halt{color:var(--neg);border-color:#5c2422;background:#2d1210}
+  #updated{margin-left:auto;color:var(--dimmer);font:11px var(--mono)}
+
+  .headline{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+            padding:20px 22px;margin-bottom:16px}
+  .netrow{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  .netlabel{font:11px var(--mono);color:var(--dim);text-transform:uppercase;letter-spacing:.8px}
+  .net{font:600 38px/1 var(--mono);letter-spacing:-1px}
+  .pos{color:var(--pos)} .neg{color:var(--neg)} .zero{color:var(--dim)}
+  .components{display:flex;gap:26px;flex-wrap:wrap;margin-top:16px;
+              padding-top:14px;border-top:1px solid var(--line)}
+  .comp{min-width:130px}
+  .comp .k{font:10px var(--mono);color:var(--dimmer);text-transform:uppercase;letter-spacing:.6px}
+  .comp .v{font:15px var(--mono);margin-top:3px}
+  .note{margin-top:14px;padding:9px 12px;border-radius:6px;font-size:12px;
+        background:#2a2109;border:1px solid #5a4708;color:#e3b341}
+  .note.bad{background:#2d1210;border-color:#5c2422;color:#ff7b72}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+        gap:10px;margin-bottom:16px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:13px 15px}
+  .stat .k{font:10px var(--mono);color:var(--dimmer);text-transform:uppercase;letter-spacing:.6px}
+  .stat .v{font:17px var(--mono);margin-top:5px}
+  .stat .sub{font:11px var(--mono);color:var(--dimmer);margin-top:2px}
+
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.9px;color:var(--dim);
+     margin:26px 0 10px;font-weight:600}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:900px}
+  th{text-align:left;font:10px var(--mono);text-transform:uppercase;letter-spacing:.6px;
+     color:var(--dimmer);padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap;font-weight:600}
+  td{padding:11px 12px;border-bottom:1px solid #21272f;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:var(--panel2)}
+  .num{font:13px var(--mono);text-align:right;white-space:nowrap}
+  th.num{text-align:right}
+  .q{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tag{font:10px var(--mono);padding:2px 7px;border-radius:4px;border:1px solid var(--line);
+       color:var(--dim);white-space:nowrap}
+  .tag.on{color:var(--pos);border-color:#1d3d24;background:#0d1f13}
+  .tag.off{color:var(--warn);border-color:#5a4708;background:#241d08}
+  .bar{height:4px;border-radius:2px;background:#21272f;margin-top:5px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent)}
+  .bar i.hot{background:var(--warn)}
+  .empty{padding:34px;text-align:center;color:var(--dimmer);font-size:13px}
+  .stale{color:var(--warn)}
+  footer{margin-top:30px;color:var(--dimmer);font-size:11px;line-height:1.7}
+  code{font:11px var(--mono);color:var(--dim);background:var(--panel2);padding:1px 5px;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Friday <span>· liquidity-rewards MM</span></h1>
+    <span class="pill" id="mode">…</span>
+    <span class="pill" id="halt" hidden>halted</span>
+    <span id="updated">connecting…</span>
+  </header>
+
+  <div class="note bad" id="stall" hidden style="margin-bottom:16px"></div>
+
+  <div class="headline">
+    <div class="netrow">
+      <div>
+        <div class="netlabel" id="netlabel">net p&l — window</div>
+        <div class="net zero" id="net">$0.00</div>
+      </div>
+    </div>
+    <div class="components">
+      <div class="comp"><div class="k">reward income</div><div class="v" id="reward">$0.00</div></div>
+      <div class="comp"><div class="k">adverse selection</div><div class="v" id="adverse">$0.00</div></div>
+      <div class="comp"><div class="k">inventory m2m</div><div class="v" id="mtm">$0.00</div></div>
+      <div class="comp"><div class="k">fills</div><div class="v" id="fills">0</div></div>
+    </div>
+    <div class="note" id="projnote" hidden></div>
+  </div>
+
+  <div class="grid">
+    <div class="stat"><div class="k">expected gross</div><div class="v" id="exp">$0.00</div><div class="sub">per day, quoting now</div></div>
+    <div class="stat"><div class="k">capital deployed</div><div class="v" id="cap">$0</div><div class="sub" id="capsub">of bankroll</div></div>
+    <div class="stat"><div class="k">quoting</div><div class="v" id="quoting">0</div><div class="sub" id="uptime">uptime —</div></div>
+    <div class="stat"><div class="k">avg markout</div><div class="v" id="markout">—</div><div class="sub" id="markoutsub">health signal</div></div>
+  </div>
+
+  <h2>Markets</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>market</th><th>state</th>
+        <th class="num">bid</th><th class="num">ask</th>
+        <th class="num">half / band</th>
+        <th class="num">pool $/d</th><th class="num">depth</th>
+        <th class="num">our share</th><th class="num">exp $/d</th>
+        <th class="num">pos</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="10" class="empty">waiting for data…</td></tr></tbody>
+    </table>
+  </div>
+
+  <h2>Recent fills</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>time</th><th>market</th><th class="num">size</th><th class="num">price</th><th class="num">markout</th></tr></thead>
+      <tbody id="fillrows"><tr><td colspan="5" class="empty">no fills — dry-run records none by design</td></tr></tbody>
+    </table>
+  </div>
+
+  <footer>
+    NET is the headline: reward income &minus; adverse selection + inventory mark-to-market.
+    Gross reward income is never shown alone.<br>
+    Dry-run measures quoting behaviour and reward eligibility only — it does not simulate fills,
+    because an optimistic fill assumption is what invalidated the predecessor project.<br>
+    Serving on localhost only. <code>main.py dashboard</code>
+  </footer>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = (v, d=2) => (v<0?"-":"+") + "$" + Math.abs(v).toFixed(d);
+const cls = v => v > 0.004 ? "pos" : v < -0.004 ? "neg" : "zero";
+const esc = s => String(s??"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function render(s){
+  const mode = $("mode");
+  mode.textContent = s.dry_run ? "paper · dry-run" : "live capital";
+  mode.className = "pill " + (s.dry_run ? "paper" : "live");
+
+  const n = s.net;
+  $("netlabel").textContent = `net p&l — ${s.window_days}d window`;
+  const net = $("net");
+  net.textContent = money(n.net_usd);
+  net.className = "net " + cls(n.net_usd);
+
+  const rw = n.reward_realised || n.reward_expected || 0;
+  $("reward").textContent = money(rw);
+  $("reward").className = "v " + cls(rw);
+  $("adverse").textContent = money(-n.adverse_selection);
+  $("adverse").className = "v " + (n.adverse_selection > 0.004 ? "neg" : "zero");
+  $("mtm").textContent = money(n.inventory_mtm);
+  $("mtm").className = "v " + cls(n.inventory_mtm);
+  $("fills").textContent = n.n_fills;
+
+  const st = $("stall");
+  if (s.loop && s.loop.stalled){
+    st.hidden = false;
+    const age = s.loop.age_s === null ? "never" :
+      s.loop.age_s > 3600 ? (s.loop.age_s/3600).toFixed(1)+"h ago" :
+      Math.round(s.loop.age_s)+"s ago";
+    st.textContent = `QUOTING LOOP NOT RUNNING — last cycle ${age}. `
+      + `Nothing is managing orders. Numbers below are historical.`;
+  } else st.hidden = true;
+
+  const note = $("projnote");
+  if (n.reward_is_projection){
+    note.hidden = false; note.className = "note";
+    note.textContent = "Reward income is EXPECTED, not realised — no on-chain credits confirmed yet. Treat this net figure as a projection.";
+  } else if (n.avg_markout !== null && n.avg_markout < 0){
+    note.hidden = false; note.className = "note bad";
+    note.textContent = "Average markout is negative: quotes are too tight for this environment. Widen or stand down.";
+  } else note.hidden = true;
+
+  $("exp").textContent = "$" + (s.totals.expected_per_day||0).toFixed(2);
+  $("cap").textContent = "$" + Math.round(s.totals.capital_deployed||0);
+  $("capsub").textContent = s.bankroll ? `of $${s.bankroll} bankroll` : "deployed";
+  $("quoting").textContent = `${s.totals.n_quoting} / ${s.totals.n_markets}`;
+  $("uptime").textContent = `uptime ${(n.uptime_pct||0).toFixed(0)}% · ${n.n_cycles} cycles`;
+
+  const mo = $("markout");
+  if (n.avg_markout === null){ mo.textContent = "—"; mo.className="v zero";
+    $("markoutsub").textContent = "no fills yet"; }
+  else { mo.textContent = n.avg_markout.toFixed(5); mo.className = "v " + cls(n.avg_markout);
+    $("markoutsub").textContent = n.avg_markout < 0 ? "quoting too tight" : "healthy"; }
+
+  const halt = $("halt");
+  halt.hidden = !s.halted;
+
+  $("rows").innerHTML = s.markets.length ? s.markets.map(m => {
+    const share = (m.implied_share||0)*100;
+    const bandUse = m.half_spread && m.reward_band ? (m.half_spread/m.reward_band)*100 : 0;
+    const state = m.quoting
+      ? '<span class="tag on">quoting</span>'
+      : `<span class="tag off">${esc(m.reason||"stand down")}</span>`;
+    return `<tr>
+      <td class="q" title="${esc(m.question)}">${esc(m.question)}
+        ${m.stale ? '<div class="sub stale" style="font:10px var(--mono)">stale '+Math.round(m.age_s)+'s</div>' : ''}</td>
+      <td>${state}</td>
+      <td class="num">${m.bid_px?m.bid_px.toFixed(4):"—"}<div style="color:var(--dimmer);font-size:11px">${m.bid_sz?m.bid_sz.toFixed(0):""}</div></td>
+      <td class="num">${m.ask_px?m.ask_px.toFixed(4):"—"}<div style="color:var(--dimmer);font-size:11px">${m.ask_sz?m.ask_sz.toFixed(0):""}</div></td>
+      <td class="num">${m.half_spread?m.half_spread.toFixed(4):"—"} / ${m.reward_band?m.reward_band.toFixed(3):"—"}
+        <div class="bar"><i class="${bandUse>85?'hot':''}" style="width:${Math.min(100,bandUse)}%"></i></div></td>
+      <td class="num">${m.pool!=null?m.pool.toFixed(0):"—"}</td>
+      <td class="num">${m.depth!=null?m.depth.toLocaleString(undefined,{maximumFractionDigits:0}):"—"}</td>
+      <td class="num">${share?share.toFixed(1)+"%":"—"}</td>
+      <td class="num">${m.expected!=null?"$"+m.expected.toFixed(2):"—"}</td>
+      <td class="num">${m.position?m.position.toFixed(0):"0"}</td>
+    </tr>`;
+  }).join("") : '<tr><td colspan="10" class="empty">no markets in window — run <code>main.py serve</code></td></tr>';
+
+  $("fillrows").innerHTML = s.fills.length ? s.fills.map(f => `<tr>
+      <td class="num" style="text-align:left">${new Date(f.ts).toLocaleTimeString()}</td>
+      <td class="q">${esc(f.condition_id.slice(0,18))}…</td>
+      <td class="num ${f.signed_size>0?'pos':'neg'}">${f.signed_size>0?"+":""}${f.signed_size.toFixed(0)}</td>
+      <td class="num">${f.price.toFixed(4)}</td>
+      <td class="num ${f.markout==null?'':cls(f.markout)}">${f.markout==null?"pending":f.markout.toFixed(5)}</td>
+    </tr>`).join("")
+    : '<tr><td colspan="5" class="empty">no fills — dry-run records none by design</td></tr>';
+
+  $("updated").textContent = "updated " + new Date(s.ts).toLocaleTimeString();
+}
+
+async function tick(){
+  try{
+    const r = await fetch("/api/state");
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json());
+  }catch(e){
+    $("updated").textContent = "disconnected — " + e.message;
+  }
+}
+tick(); setInterval(tick, 5000);
+</script>
+</body>
+</html>
