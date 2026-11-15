@@ -66,6 +66,7 @@ Each row links to the file that holds the numbers. All of them are offline or re
 | **Sports models** (draw bias, Poisson) | Rejected | Draw bias: +1.88% in-sample, −12.88% out-of-sample. Poisson Brier 0.1576 vs 0.1497 for the market. See [sports](research/FINDINGS_sports.md) |
 | **Exclusive-outcome sums** | Rejected | Real violations (2 of 216), but a per-leg fee made both net negative. See [exclusive](research/FINDINGS_exclusive.md) |
 | **Two-leg monotonicity** | Rejected | Real violations with depth, but 1.17% annualised on $7,299 of capital. See [monotonicity](research/FINDINGS_monotonicity.md) |
+| **Cross-venue arbitrage** (Polymarket vs Kalshi) | Rejected | Real gaps on 18 matched pairs, but the best pays ~10% annualised with capital locked for months, against 4–5% from T-bills. See [cross-venue](research/crossvenue/FINDINGS.md) |
 | **LLM with search (H005)** | **Pending** | Pre-registered. Scored on or after 2026-11-21 |
 
 ### Three results worth the read
