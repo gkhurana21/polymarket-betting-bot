@@ -60,7 +60,7 @@ Each row links to the file that holds the numbers. All of them are offline or re
 | **Copy whale trades** | Rejected | −18.1% ROI with realistic fills (35 settled), t ≈ 0. See [FINDINGS.md](FINDINGS.md) |
 | **Complement arbitrage** (buy YES + NO under $1) | Closed, venue-wide | 0 of 908 markets, both directions. The pair sits one tick (0.001) from $1, because split/merge pins it. See [thin markets](research/FINDINGS_thin_markets.md) |
 | **Favourite-longshot bias** | Rejected | Realised frequency tracks the ask across 2,379 resolved markets. The one survivor has t = 0.91 and flips sign by slice. See [longshot](research/FINDINGS_longshot.md) |
-| **Friday market making** (liquid markets) | Rejected | Liquidity rewards covered 17% of measured adverse selection. Recorded in [thin markout](research/FINDINGS_thin_markout.md) |
+| **Friday market making** (liquid markets) | Rejected | Liquidity rewards covered 17% of measured adverse selection. The bot is in [friday/](friday/README.md), its result in [friday/FINDINGS.md](friday/FINDINGS.md) |
 | **Thin-market making** | Not tradeable | Markout is positive (+0.179c) but only +0.100c per fill, and 64% of markets are too one-sided to round-trip. See [thin markout](research/FINDINGS_thin_markout.md) |
 | **LLM forecasting, no retrieval** | Rejected | Brier 0.1571 vs 0.1368 for the market on the same 220 markets. See [LLM](research/FINDINGS_llm.md) |
 | **Sports models** (draw bias, Poisson) | Rejected | Draw bias: +1.88% in-sample, −12.88% out-of-sample. Poisson Brier 0.1576 vs 0.1497 for the market. See [sports](research/FINDINGS_sports.md) |
