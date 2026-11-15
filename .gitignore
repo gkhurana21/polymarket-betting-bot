@@ -37,3 +37,6 @@ build/
 dist/
 *.egg-info/
 .claude/
+
+# a stray Obsidian vault
+tests/poly betting bot/
