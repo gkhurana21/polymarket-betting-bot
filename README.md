@@ -131,9 +131,11 @@ research/*.py ──> read-only studies on the stored corpus and public endpoint
 | `bot/tracker.py` | SQLite in WAL mode, an append-only audit log, settlement |
 | `bot/arbitrage_scanner.py` | Observation-only complement scanner with an explicit fee and slippage model |
 | `bot/executor.py`, `bot/risk.py` | Phase B order path with realistic fill modelling and position, drawdown and size guards |
-| `research/` | 12 study scripts and the findings they produced |
+| `research/` | The study scripts and the findings they produced |
+| `research/crossvenue/` | Polymarket vs Kalshi: question matching, a validated LLM adjudicator for matched pairs, spread and annualised-return scoring |
+| `friday/` | Friday, a liquidity-rewards market maker: reward-band quoting, inventory and guard limits, a replay harness, a thin-market scanner, and its own tests |
 
-Numbers: about 6,600 lines in `bot/`, about 2,700 in `research/`, about 4,100 in `tests/`. Python, SQLite, `scipy`
+Numbers: about 6,600 lines in `bot/`, about 3,200 in `research/` (crossvenue included), about 4,100 in `tests/`, and about 3,400 in `friday/` (550 of them tests). Python, SQLite, `scipy`
 for the z-test and Fisher's exact test, and `rich` for the CLI.
 
 **Tests.** There are 15 offline smoke scripts in `tests/`, covering modules 1 to 12, the opportunity funnel, the LLM
