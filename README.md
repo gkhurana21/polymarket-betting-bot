@@ -1,18 +1,31 @@
-# Polymarket Research Rig
+<h1 align="center">
+  <img src="docs/banner.svg" alt="Polymarket Research Rig. 11 hypotheses tested, 21,243 resolved paper signals, 71 days of observation, $0 of real money risked." width="880">
+</h1>
 
-**A copy-trading bot for Polymarket that was built to test its own idea, found the idea does not work, and then tested ten more the same way. Paper trading only: no order was ever sent and no money was risked.**
+<p align="center">
+  <a href="https://github.com/gkhurana21/polymarket-betting-bot/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gkhurana21/polymarket-betting-bot/ci.yml?branch=master&label=tests&style=flat-square" alt="Tests"></a>
+  <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/mode-paper%20only-2ea043?style=flat-square" alt="Paper trading only">
+  <img src="https://img.shields.io/badge/pre--registered-H005-8957e5?style=flat-square" alt="Pre-registered: H005">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT licence"></a>
+</p>
 
-[![CI](https://img.shields.io/github/actions/workflow/status/gkhurana21/polymarket-betting-bot/ci.yml?branch=master&label=CI)](https://github.com/gkhurana21/polymarket-betting-bot/actions/workflows/ci.yml)
+<p align="center">
+  <a href="#what-was-tested"><b>Verdicts</b></a> ·
+  <a href="#what-is-proven"><b>Method</b></a> ·
+  <a href="#h005-a-forecast-test-that-can-fail-in-public"><b>H005</b></a> ·
+  <a href="#what-is-not-claimed"><b>Limits</b></a> ·
+  <a href="#run-it"><b>Run it</b></a> ·
+  <a href="FINDINGS.md"><b>Full findings</b></a>
+</p>
 
-| 11 | 21,243 | 71 days | $0 |
-|:---:|:---:|:---:|:---:|
-| hypotheses tested, 10 rejected, 1 pre-registered and pending | resolved paper signals in the copy-trading test | of observation, 2026-05-23 to 2026-08-02 | real money risked |
+**A copy-trading bot for Polymarket that was built to test its own idea, found the idea does not work, and then tested ten more the same way.** Every verdict is written down with the number that decided it, including the ones that hurt. Paper trading only: no order was ever sent and no money was risked.
 
 <p align="center">
   <img src="docs/fill-assumption.svg" alt="The same copy-trading forward test under three fill assumptions: plus 21.8% when every order fills at the whale's own price, plus 4.8% at the prices real order books offered, minus 18.1% with fills modelled through real book depth." width="880">
 </p>
 
-*The first dry run reported +21.8%. The only thing that changed between the three bars is how honestly the fill was priced.*
+<p align="center"><i>The first dry run reported +21.8%. The only thing that changed between the three bars is how honestly the fill was priced.</i></p>
 
 ## What it is
 
@@ -26,10 +39,16 @@ A research harness around Polymarket's public APIs, and the record of what it fo
 
 Two things sit beside the daemon: [`friday/`](friday/README.md), a liquidity-rewards market maker that was built and then measured against its own costs, and [`research/`](research), the study scripts.
 
-```text
-whale poll (60 s) ──> signals ──> paper_consumer ──> four streams ──> resolution poll ──> decision matrix
-market scan (10 min) ──> snapshots + book depth ──────────────────────────^
-research/*.py ──> read-only studies on the stored corpus and public endpoints ──> FINDINGS_*.md
+```mermaid
+flowchart LR
+  W["Whale poll<br/>every 60 s"] --> S["Signals<br/>open · add · exit · flip"]
+  S --> P["Four paper streams<br/>one is a random-side control"]
+  P --> R["Resolution poll<br/>settles every trade"]
+  R --> D["Decision matrix<br/>halt · inconclusive · build"]
+  M["Market scan<br/>every 10 min"] --> B["Snapshots and<br/>order-book depth"]
+  B --> P
+  B --> X["research/ studies<br/>read-only"]
+  X --> F["A FINDINGS file<br/>per hypothesis"]
 ```
 
 ## What was tested
@@ -53,6 +72,10 @@ Several of these found something real: actual constraint violations, positive ma
 Three of these are worth reading in full.
 
 **The edge was a fill assumption.** The first dry run filled every order at the whale's own price. Against real order books the obtainable price was on average 4.08 cents worse. Recomputing at real prices took the forward test from +21.8% to +4.8%, and modelling fills properly took it to −18.1%. A 59% win rate still lost money, because wins on heavy favourites pay pennies and one loss erases twenty.
+
+<p align="center">
+  <img src="docs/win-rate.svg" alt="Copy-whale paper trades by entry price. Win rate rises from 12.3% under 0.30 to 93.5% over 0.80, but return on investment is negative in three of four bands, and the one positive band, 0.30 to 0.60 at plus 15.5%, failed in the forward test." width="880">
+</p>
 
 **Speed was not the constraint.** The detection lag (p50 about 47 minutes) comes from Polymarket's public data API. The tempting fix is a faster on-chain watcher. The data says no: filled at about the whale's price, 26 orders still returned −22.9% ROI. Only 29% of signals filled (38 of 129), and those fills skew toward trades we should not take.
 

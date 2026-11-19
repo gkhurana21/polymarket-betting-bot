@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 250" role="img" aria-labelledby="bt bd" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="bt">Polymarket Research Rig</title>
+  <desc id="bd">Eleven trading hypotheses tested on Polymarket, ten rejected and one pre-registered and pending. 21,243 resolved paper signals over 71 days of observation, with zero dollars of real money risked.</desc>
+  <rect width="880" height="250" rx="14" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="879" height="249" rx="13.5" fill="none" stroke="#30363d"/>
+  <rect x="40" y="36" width="4" height="62" rx="2" fill="#6cb6ff"/>
+  <text x="58" y="50" fill="#6cb6ff" font-size="12" font-weight="600" letter-spacing="1.6">PAPER TRADING ONLY · EVERY VERDICT WRITTEN DOWN</text>
+  <text x="58" y="92" fill="#e6edf3" font-size="38" font-weight="700" letter-spacing="-0.5">Polymarket Research Rig</text>
+  <text x="40" y="132" fill="#9198a1" font-size="16">A copy-trading bot that tested its own idea to destruction, then tested ten more.</text>
+
+  <line x1="40" y1="156" x2="840" y2="156" stroke="#21262d"/>
+  <g font-size="30" font-weight="700" fill="#e6edf3">
+    <text x="40" y="198">11</text>
+    <text x="250" y="198">21,243</text>
+    <text x="470" y="198">71 days</text>
+    <text x="680" y="198">$0</text>
+  </g>
+  <g font-size="12.5" fill="#9198a1">
+    <text x="40" y="220">hypotheses tested</text>
+    <text x="250" y="220">resolved paper signals</text>
+    <text x="470" y="220">of observation</text>
+    <text x="680" y="220">real money risked</text>
+  </g>
+</svg>
