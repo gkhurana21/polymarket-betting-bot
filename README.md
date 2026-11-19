@@ -144,7 +144,9 @@ for the z-test and Fisher's exact test, and `rich` for the CLI.
 **Tests.** `pytest` runs 23 tests offline, and CI runs them on every push: 15 smoke scripts in `tests/` (modules 1 to
 12, the opportunity funnel, the LLM forecaster and the forward scorer) and Friday's 8 test modules. Each is a plain
 script that asserts as it goes, run in its own process on synthetic books and a temporary SQLite file. Three checks
-that call Polymarket itself are skipped offline (`LIVE_API_TESTS=1` turns them on).
+that call Polymarket itself are skipped offline (`LIVE_API_TESTS=1` turns them on). The contamination-detector test
+and one block of the scorer test read the stored corpus in `data/`, which is not in the repo, so a fresh clone and CI
+skip those: 22 pass and 1 is skipped there.
 
 **Fees.** Polymarket charges takers `C × feeRate × p × (1 − p)` and never charges makers. A smoke test checks the code
 against the published table at p = 0.01, 0.05, 0.50 and 0.95.

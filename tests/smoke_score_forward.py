@@ -8,6 +8,7 @@ payloads, and the cluster/subgroup assignments against the real database --
 without fetching a single outcome.
 """
 
+import os
 import sys
 
 sys.path.insert(0, "research")
@@ -67,19 +68,23 @@ def run() -> int:
     check("log-loss clips at 0.01", abs(log_loss(0.0, 1.0) - log_loss(0.01, 1.0)) < 1e-12)
 
     # ── the real file: every row assigned, counts match the pre-registration ──
-    rows = load("data/llm_forward.db")
-    check("124 rows on file", len(rows) == 124, str(len(rows)))
-    excluded = sorted(r["id"] for r in rows if r["excluded"])
-    check("excluded set is exactly the two Brazil rows",
-          excluded == ["601819", "601826"], str(excluded))
-    sizes: dict[str, int] = {}
-    for r in rows:
-        sizes[r["cluster"]] = sizes.get(r["cluster"], 0) + 1
-    check("midterms cluster holds 112 rows", sizes.get("midterms") == 112, str(sizes))
-    check("six clusters in the primary set",
-          len({r["cluster"] for r in rows if not r["excluded"]}) == 6)
-    n_odds = sum(r["cites_odds"] for r in rows)
-    check("87 rows cite odds, 37 do not", n_odds == 87, str(n_odds))
+    # data/ is not in the repo, so a fresh clone (and CI) skips this block.
+    if os.path.exists("data/llm_forward.db"):
+        rows = load("data/llm_forward.db")
+        check("124 rows on file", len(rows) == 124, str(len(rows)))
+        excluded = sorted(r["id"] for r in rows if r["excluded"])
+        check("excluded set is exactly the two Brazil rows",
+              excluded == ["601819", "601826"], str(excluded))
+        sizes: dict[str, int] = {}
+        for r in rows:
+            sizes[r["cluster"]] = sizes.get(r["cluster"], 0) + 1
+        check("midterms cluster holds 112 rows", sizes.get("midterms") == 112, str(sizes))
+        check("six clusters in the primary set",
+              len({r["cluster"] for r in rows if not r["excluded"]}) == 6)
+        n_odds = sum(r["cites_odds"] for r in rows)
+        check("87 rows cite odds, 37 do not", n_odds == 87, str(n_odds))
+    else:
+        print("  SKIP  the stored forecasts (data/llm_forward.db is local only)")
     check("odds regex is case-insensitive", bool(ODDS_RE.search("Per KALSHI pricing")))
     try:
         cluster_of("999", "Some new market")
