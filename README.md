@@ -2,6 +2,12 @@
 
 **A copy-trading bot for Polymarket that was built to test its own idea, found the idea does not work, and then tested ten more the same way. Paper trading only: no order was ever sent and no money was risked.**
 
+[![CI](https://img.shields.io/github/actions/workflow/status/gkhurana21/polymarket-betting-bot/ci.yml?branch=master&label=CI)](https://github.com/gkhurana21/polymarket-betting-bot/actions/workflows/ci.yml)
+
+| 11 | 21,243 | 71 days | $0 |
+|:---:|:---:|:---:|:---:|
+| hypotheses tested, 10 rejected, 1 pre-registered and pending | resolved paper signals in the copy-trading test | of observation, 2026-05-23 to 2026-08-02 | real money risked |
+
 <p align="center">
   <img src="docs/fill-assumption.svg" alt="The same copy-trading forward test under three fill assumptions: plus 21.8% when every order fills at the whale's own price, plus 4.8% at the prices real order books offered, minus 18.1% with fills modelled through real book depth." width="880">
 </p>
@@ -28,19 +34,21 @@ research/*.py ──> read-only studies on the stored corpus and public endpoint
 
 ## What was tested
 
-| Hypothesis | Verdict | The number that decided it |
-|---|---|---|
-| **Copy whale trades** | Rejected | −18.1% ROI with realistic fills (35 settled), t ≈ 0. See [FINDINGS.md](FINDINGS.md) |
-| **Complement arbitrage** (buy YES + NO under $1) | Closed, venue-wide | 0 of 908 markets, both directions. The pair sits one tick (0.001) from $1, because split/merge pins it. See [thin markets](research/FINDINGS_thin_markets.md) |
-| **Favourite-longshot bias** | Rejected | Realised frequency tracks the ask across 2,379 resolved markets. The one survivor has t = 0.91 and flips sign by slice. See [longshot](research/FINDINGS_longshot.md) |
-| **Friday market making** (liquid markets) | Rejected | Liquidity rewards covered 17% of measured adverse selection. The bot is in [friday/](friday/README.md), its result in [friday/FINDINGS.md](friday/FINDINGS.md) |
-| **Thin-market making** | Not tradeable | Markout is positive (+0.179c) but only +0.100c per fill, and 64% of markets are too one-sided to round-trip. See [thin markout](research/FINDINGS_thin_markout.md) |
-| **LLM forecasting, no retrieval** | Rejected | Brier 0.1571 vs 0.1368 for the market on the same 220 markets. See [LLM](research/FINDINGS_llm.md) |
-| **Sports models** (draw bias, Poisson) | Rejected | Draw bias: +1.88% in-sample, −12.88% out-of-sample. Poisson Brier 0.1576 vs 0.1497 for the market. See [sports](research/FINDINGS_sports.md) |
-| **Exclusive-outcome sums** | Rejected | Real violations (2 of 216), but a per-leg fee made both net negative. See [exclusive](research/FINDINGS_exclusive.md) |
-| **Two-leg monotonicity** | Rejected | Real violations with depth, but 1.17% annualised on $7,299 of capital. See [monotonicity](research/FINDINGS_monotonicity.md) |
-| **Cross-venue arbitrage** (Polymarket vs Kalshi) | Rejected | Real gaps on 18 matched pairs, but the best pays ~10% annualised with capital locked for months, against 4–5% from T-bills. See [cross-venue](research/crossvenue/FINDINGS.md) |
-| **LLM with search (H005)** | **Pending** | Pre-registered. Scored on or after 2026-11-21 |
+| # | Hypothesis | Verdict | The number that decided it | Write-up |
+|---|---|---|---|---|
+| 1 | **Copy whale trades** | Rejected | −18.1% ROI with realistic fills (35 settled), t ≈ 0 | [FINDINGS](FINDINGS.md) |
+| 2 | **Complement arbitrage**: buy YES + NO under $1 | Closed, venue-wide | 0 of 908 markets. Split and merge pin the pair one tick from $1 | [thin markets](research/FINDINGS_thin_markets.md) |
+| 3 | **Favourite-longshot bias** | Rejected | Realised frequency tracks the ask across 2,379 resolved markets | [longshot](research/FINDINGS_longshot.md) |
+| 4 | **Market making for liquidity rewards** | Rejected | Rewards covered 17% of measured adverse selection | [Friday](friday/FINDINGS.md) |
+| 5 | **Thin-market making** | Not tradeable | +0.100c per fill, and 64% of markets are too one-sided to round-trip | [thin markout](research/FINDINGS_thin_markout.md) |
+| 6 | **LLM forecasting, no retrieval** | Rejected | Brier 0.1571 against the market's 0.1368 on the same 220 markets | [LLM](research/FINDINGS_llm.md) |
+| 7 | **Sports models**: draw bias, Poisson | Rejected | Draw bias +1.88% in sample, −12.88% out of sample | [sports](research/FINDINGS_sports.md) |
+| 8 | **Exclusive-outcome sums** | Rejected | 2 real violations in 216, both net negative after the per-leg fee | [exclusive](research/FINDINGS_exclusive.md) |
+| 9 | **Two-leg monotonicity** | Rejected | Real violations, but 1.17% annualised on $7,299 of capital | [monotonicity](research/FINDINGS_monotonicity.md) |
+| 10 | **Cross-venue arbitrage**: Polymarket vs Kalshi | Rejected | Best of 18 matched pairs pays ~10% annualised, locked for months | [cross-venue](research/crossvenue/FINDINGS.md) |
+| 11 | **LLM with live search (H005)** | **Pending** | Scored on or after 2026-11-21 | [pre-registration](research/PREREG_llm_forward.md) |
+
+Several of these found something real: actual constraint violations, positive markout, genuine price gaps between venues. Those were rejected on what it would pay after fees, fills and locked capital, not on whether the effect exists.
 
 Three of these are worth reading in full.
 
