@@ -1,62 +1,32 @@
-<div align="center">
-
 # Polymarket Research Rig
 
-### A copy-trading bot that tested its own idea to destruction, then kept testing.
+**A copy-trading bot for Polymarket that was built to test its own idea, found the idea does not work, and then tested ten more the same way. Paper trading only: no order was ever sent and no money was risked.**
 
-*Real money risked: $0. Hypotheses rejected, with the numbers: nearly all of them. That was the point.*
+<p align="center">
+  <img src="docs/fill-assumption.svg" alt="The same copy-trading forward test under three fill assumptions: plus 21.8% when every order fills at the whale's own price, plus 4.8% at the prices real order books offered, minus 18.1% with fills modelled through real book depth." width="880">
+</p>
 
-<br/>
+*The first dry run reported +21.8%. The only thing that changed between the three bars is how honestly the fill was priced.*
 
-[![Findings](https://img.shields.io/badge/Read-FINDINGS.md-111111?style=for-the-badge&logo=readthedocs&logoColor=white)](FINDINGS.md)
-[![Pre-registration](https://img.shields.io/badge/Pre--registered-H005-7C3AED?style=for-the-badge&logo=git&logoColor=white)](research/PREREG_llm_forward.md)
-[![Portfolio](https://img.shields.io/badge/Portfolio-gaurangkhurana.ca-111111?style=for-the-badge&logo=About.me&logoColor=white)](https://gaurangkhurana.ca)
+## What it is
 
-<br/>
+A research harness around Polymarket's public APIs, and the record of what it found.
 
-[![CI](https://img.shields.io/github/actions/workflow/status/gkhurana21/polymarket-betting-bot/ci.yml?branch=master&style=flat-square&label=CI)](https://github.com/gkhurana21/polymarket-betting-bot/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
-![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite&logoColor=white)
-![Polymarket](https://img.shields.io/badge/Polymarket-CLOB%20API-2E5CFF?style=flat-square)
-![Mode](https://img.shields.io/badge/mode-paper%20only-brightgreen?style=flat-square)
-![Not advice](https://img.shields.io/badge/financial%20advice-no-red?style=flat-square)
-![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+1. A daemon polls the wallets at the top of Polymarket's leaderboard and classifies each trade as an open, add, exit or flip.
+2. Every signal becomes four paper trades side by side: copy the whale, a blended variant, the whale's side at a random time, and a **random side** as the control.
+3. A scanner stores market snapshots and order-book depth, so a paper fill can be priced by walking the real book rather than assumed.
+4. A poller settles every trade when its market resolves, and a decision matrix says whether the evidence supports going further.
+5. When copy-trading failed, the stored corpus and the same rules were used to test ten more hypotheses. Each finished one has a findings file with the number that decided it.
 
-[The problem](#the-problem) • [Verdicts](#the-verdicts) • [Method](#the-method) • [Under the hood](#under-the-hood) • [Run it](#run-it)
+Two things sit beside the daemon: [`friday/`](friday/README.md), a liquidity-rewards market maker that was built and then measured against its own costs, and [`research/`](research), the study scripts.
 
-</div>
+```text
+whale poll (60 s) ──> signals ──> paper_consumer ──> four streams ──> resolution poll ──> decision matrix
+market scan (10 min) ──> snapshots + book depth ──────────────────────────^
+research/*.py ──> read-only studies on the stored corpus and public endpoints ──> FINDINGS_*.md
+```
 
----
-
-![The same copy-trading forward test under three fill assumptions: plus 21.8% at the whale's own price, plus 4.8% at real book prices, minus 18.1% with realistic fills.](docs/fill-assumption.svg)
-
-> **Disclaimer:** This is research and paper trading only. Prediction markets involve financial risk and you can lose
-> money. The code refuses to start with `dry_run: false` in the observation phase. Nothing here is financial advice.
-
-## The problem
-
-Polymarket publishes what its biggest traders buy. The obvious idea is to copy them. Paper results can look great and
-still be wrong, because it is easy to assume you get the price the whale got.
-
-## The fix
-
-**Build the copy-trading bot, then try to break it.** The rig tracks whales, runs four paper-trade streams side by
-side (with a random-side control), and settles every trade. When a result looked good, the next step was to check it
-against real order books. When it died, the next hypothesis got the same treatment. Every verdict is written down,
-including the ones that hurt.
-
-<table>
-<tr>
-<td align="center" width="25%"><h3>11</h3><sub>trading hypotheses tested: 10 rejected with the deciding number, 1 pre-registered and pending</sub></td>
-<td align="center" width="25%"><h3>21,243</h3><sub>resolved paper signals in the copy-trading test</sub></td>
-<td align="center" width="25%"><h3>−18.1%</h3><sub>ROI of the live-path forward test with realistic fills (35 settled)</sub></td>
-<td align="center" width="25%"><h3>$0</h3><sub>real money risked, over about 71 days of observation</sub></td>
-</tr>
-</table>
-
-## The verdicts
-
-Each row links to the file that holds the numbers. All of them are offline or read-only against public data.
+## What was tested
 
 | Hypothesis | Verdict | The number that decided it |
 |---|---|---|
@@ -72,136 +42,97 @@ Each row links to the file that holds the numbers. All of them are offline or re
 | **Cross-venue arbitrage** (Polymarket vs Kalshi) | Rejected | Real gaps on 18 matched pairs, but the best pays ~10% annualised with capital locked for months, against 4–5% from T-bills. See [cross-venue](research/crossvenue/FINDINGS.md) |
 | **LLM with search (H005)** | **Pending** | Pre-registered. Scored on or after 2026-11-21 |
 
-### Three results worth the read
+Three of these are worth reading in full.
 
-**The edge was a fill assumption.** The first dry run filled every order at the whale's own price. Against real order
-books the obtainable price was on average 4.08 cents worse. Recomputing at real prices took the forward test from
-+21.8% to +4.8%, and modelling fills properly took it to −18.1%. A 59% win rate still lost money, because wins on
-heavy favourites pay pennies and one loss erases twenty.
+**The edge was a fill assumption.** The first dry run filled every order at the whale's own price. Against real order books the obtainable price was on average 4.08 cents worse. Recomputing at real prices took the forward test from +21.8% to +4.8%, and modelling fills properly took it to −18.1%. A 59% win rate still lost money, because wins on heavy favourites pay pennies and one loss erases twenty.
 
-**Speed was not the constraint.** The detection lag (p50 about 47 minutes) comes from Polymarket's public data API.
-The tempting fix is a faster on-chain watcher. The data says no: filled at about the whale's price, 26 orders still
-returned −22.9% ROI. Only 29% of signals filled (38 of 129), and those fills skew toward trades we should not take.
+**Speed was not the constraint.** The detection lag (p50 about 47 minutes) comes from Polymarket's public data API. The tempting fix is a faster on-chain watcher. The data says no: filled at about the whale's price, 26 orders still returned −22.9% ROI. Only 29% of signals filled (38 of 129), and those fills skew toward trades we should not take.
 
-**Six studies searched under the streetlight.** The filters kept 75 of 2,100 open markets, which is 3.6% of the venue.
-Complement arbitrage was retested on the 466-market middle band, with the same answer. The scope error is written up
-in [FINDINGS_thin_markets.md](research/FINDINGS_thin_markets.md), next to the fix.
+**Six studies searched under the streetlight.** The filters kept 75 of 2,100 open markets, which is 3.6% of the venue. Complement arbitrage was retested on the 466-market middle band, with the same answer. The scope error is written up in [FINDINGS_thin_markets.md](research/FINDINGS_thin_markets.md), next to the fix.
 
-## The method
+## What is proven
 
-The rig was built so a wrong answer is hard to produce quietly.
+Not that a strategy works. What is shown is that the rig makes a wrong answer hard to produce quietly.
 
-* **Realistic fills.** Prices are ask-side VWAP walked through real book depth. Midpoints and last trades are not
-  prices you can buy at. Wide books (a stub bid 0.001 and ask 0.998) are filtered, because one fabricated a t = −3.31.
-* **A control stream.** `null_random_side` picks YES or NO at random, so "the whale won" has something to beat.
-* **Time-split validation.** Findings are checked out of sample. A +7.5% mid-band result later turned out to be an artifact.
-* **Pre-registration.** The H005 rules, the declared defects, the decision rule and the scoring date were all committed
-  before any market resolved. The git history is the timestamp.
-* **Disagreeing statistics are bugs.** In the thin-market study the mean (−1.839c), median (+0.050c) and share-weighted
-  (+1.864c) markout disagreed in sign. That exposed a token mix-up that had produced a confident, wrong, opposite result.
-  After the fix the three agree.
-* **Bugs are listed with the findings.** Wrong order sides, shares passed as USD, a drawdown guard that blocked 687 of
-  688 valid intents, and a Gamma filter that silently returns unrelated markets. All caught in dry run.
-
-### H005: a forecast test that can fail in public
-
-H005 asks whether an LLM with live search beats the market. It stored 124 forecasts on 2026-09-24
-(`gemini-3.1-pro-preview`, Google Search grounding, temperature 0). The rules are in
-[PREREG_llm_forward.md](research/PREREG_llm_forward.md), and the scoring date is in
-[SCORING_DATE_llm_forward.md](research/SCORING_DATE_llm_forward.md).
-
-* The pre-registration declares four known defects up front. The market price leaked through search on 87 of 124
-  rows. 112 rows depend on US midterm results, so the effective sample is a handful of events.
-* **Primary test:** mean squared-error difference against the market, cluster bootstrap, 10,000 resamples, seed fixed.
-* **The expected verdict is "not demonstrated."** The test runs anyway because it is nearly free, and it is publishable
-  either way.
-* **Status:** 112 of 122 primary rows had resolved by 2026-11-12. No interim score has been computed or looked at.
-
-## Under the hood
-
-```text
-whale poll (60 s) ──> signals ──> paper_consumer ──> four streams ──> resolution poll ──> decision matrix
-market scan (10 min) ──> snapshots + book depth ──────────────────────────^
-research/*.py ──> read-only studies on the stored corpus and public endpoints ──> FINDINGS_*.md
-```
-
-| Piece | What it does |
+| Claim | Evidence |
 |---|---|
-| `bot/whale_tracker.py`, `bot/whale_perf.py` | Poll tracked wallets, classify open / add / exit / flip signals, keep a Beta trust score per whale |
-| `bot/paper_trader.py` | Fan each signal out to four streams: `copy_whale`, `stub_blend`, `null_random_side`, `whale_side_random_timing` |
-| `bot/calibration.py` | Readiness gate and decision matrix (`HALT`, `INCONCLUSIVE`, `BUILD_B_RELAXED`, `BUILD_B_FULL`) |
-| `bot/client.py` | CLOB wrapper with retry and a circuit breaker |
-| `bot/tracker.py` | SQLite in WAL mode, an append-only audit log, settlement |
-| `bot/arbitrage_scanner.py` | Observation-only complement scanner with an explicit fee and slippage model |
-| `bot/executor.py`, `bot/risk.py` | Phase B order path with realistic fill modelling and position, drawdown and size guards |
-| `research/` | The study scripts and the findings they produced |
-| `research/crossvenue/` | Polymarket vs Kalshi: question matching, a validated LLM adjudicator for matched pairs, spread and annualised-return scoring |
-| `friday/` | Friday, a liquidity-rewards market maker: reward-band quoting, inventory and guard limits, a replay harness, a thin-market scanner, and its own tests |
+| Fills are priced at what the book would have given | Ask-side VWAP walked through stored book depth, never a midpoint or last trade. Wide books (a stub bid at 0.001 and ask at 0.998) are filtered, because one fabricated a t = −3.31 |
+| "The whale won" has something to beat | The `null_random_side` stream takes the same signals and picks YES or NO at random |
+| Results are checked out of sample | A +7.5% mid-band result on a time split later turned out to be an artifact, and is reported as one |
+| The H005 rules were fixed before any outcome | The rules, four declared defects, the decision rule and the scoring date were committed before any market resolved. The git history is the timestamp |
+| Disagreeing statistics are treated as bugs | In the thin-market study the mean (−1.839c), median (+0.050c) and share-weighted (+1.864c) markout disagreed in sign. That exposed a token mix-up behind a confident, wrong, opposite result. After the fix the three agree |
+| The fee model is Polymarket's own | Takers pay `C × feeRate × p × (1 − p)` and makers pay nothing. A test checks the code against the published table at p = 0.01, 0.05, 0.50 and 0.95 |
+| The tests run on every push | `pytest` runs 23 tests offline: 15 smoke scripts and Friday's 8 test modules, each in its own process on synthetic books and a temporary SQLite file. In CI, 22 pass and 1 is skipped because it needs the stored corpus |
 
-Numbers: about 6,600 lines in `bot/`, about 3,200 in `research/` (crossvenue included), about 4,100 in `tests/`, and about 3,400 in `friday/` (550 of them tests). Python, SQLite, `scipy`
-for the z-test and Fisher's exact test, and `rich` for the CLI.
+Bugs are listed with the findings rather than hidden: wrong order sides, shares passed as USD, a drawdown guard that blocked 687 of 688 valid intents, and a Gamma filter that silently returns unrelated markets. All were caught in dry run.
 
-**Tests.** `pytest` runs 23 tests offline, and CI runs them on every push: 15 smoke scripts in `tests/` (modules 1 to
-12, the opportunity funnel, the LLM forecaster and the forward scorer) and Friday's 8 test modules. Each is a plain
-script that asserts as it goes, run in its own process on synthetic books and a temporary SQLite file. Three checks
-that call Polymarket itself are skipped offline (`LIVE_API_TESTS=1` turns them on). The contamination-detector test
-and one block of the scorer test read the stored corpus in `data/`, which is not in the repo, so a fresh clone and CI
-skip those: 22 pass and 1 is skipped there.
+## H005: a forecast test that can fail in public
 
-**Fees.** Polymarket charges takers `C × feeRate × p × (1 − p)` and never charges makers. A smoke test checks the code
-against the published table at p = 0.01, 0.05, 0.50 and 0.95.
+H005 asks whether an LLM with live search beats the market. It stored 124 forecasts on 2026-09-24 (`gemini-3.1-pro-preview`, Google Search grounding, temperature 0). The rules are in [PREREG_llm_forward.md](research/PREREG_llm_forward.md), and the scoring date is in [SCORING_DATE_llm_forward.md](research/SCORING_DATE_llm_forward.md).
+
+- The pre-registration declares four known defects up front. The market price leaked through search on 87 of 124 rows. 112 rows depend on US midterm results, so the effective sample is a handful of events.
+- **Primary test:** mean squared-error difference against the market, cluster bootstrap, 10,000 resamples, seed fixed.
+- **The expected verdict is "not demonstrated."** The test runs anyway because it is nearly free, and it is publishable either way.
+- **Status:** 112 of 122 primary rows had resolved by 2026-11-12. No interim score has been computed or looked at.
+
+## What is not claimed
+
+**No edge.** The headline is a negative result. The reusable part is the harness, not a strategy.
+
+**No live trading.** The order path exists and was exercised only in dry run. `PRIVATE_KEY` was never set and no wallet was funded. The observation phase refuses to start with `dry_run: false`. Nothing here is financial advice.
+
+**Not every verdict is strong.** Several studies rest on small samples (n = 32 for the bookmaker comparison, 35 settled live-path orders) or are in sample where noted. The findings mark those as directions, not verdicts.
+
+**The H005 result is expected to be weak.** The sample is one correlated midterm event, and the prompt leaked the market price. A rerun would need the fixes listed in the pre-registration.
+
+**The sports-model question is not closed.** A real test is blocked on data.
+
+**Not all of it can be rerun.** The stored corpus (`data/`) is not in the repo. Some research scripts read `/tmp` inputs and live endpoints. And Polymarket has since retired the Data API v1 and leaderboard endpoints the whale daemon polls (HTTP 410 on 2026-11-19), so `serve` and `whales` would need porting to Data API v2. The market scanner and the order-book studies use the CLOB and Gamma APIs, which still answer.
+
+**One bug was never fixed.** The whale universe is frozen at daemon startup. See the 2026-06-03 entry in [OBSERVATIONS.md](OBSERVATIONS.md).
 
 ## Run it
 
-Python 3.10+ is required.
+Python 3.10 or later.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # CLOB keys are optional for public reads. Leave PRIVATE_KEY unset.
+pytest -q                                   # all 23 tests, offline
 ```
 
-Keep `dry_run: true` and `phase: A` in `config.yaml`. With `dry_run: false` the observation phase refuses to start.
+To run the tools, copy `.env.example` to `.env` (the CLOB keys are optional for public reads; leave `PRIVATE_KEY` unset) and keep `dry_run: true` and `phase: A` in `config.yaml`.
 
 ```bash
 python main.py scan                  # one-shot market scan
-python main.py serve                 # the observation daemon (Ctrl+C to stop)
 python main.py status                # readiness counters and decision matrix
-python main.py whales                # whale trust scorecard
 python main.py pnl --days 7          # P&L per stream
 python main.py arb-scan              # one read-only complement arbitrage pass
 python main.py arb-status --days 7   # frequency, capacity, edge, rejections
-```
-
-Run the tests, one smoke script, or a study:
-
-```bash
-pytest -q                                   # all 23, offline
-.venv/bin/python tests/smoke_module12.py
+python main.py serve                 # the observation daemon (needs the retired Data API v1; see above)
 python3 research/longshot_study.py --buffer-hours 6 --max-spread 0.05
 ```
 
-`data/trades.db` is the paper-trade store and `data/audit.log.jsonl` is the audit log. Run only one `serve` per
-database. The full architecture and schema are in [PLAN.md](PLAN.md), and the daemon's day-one notes are in
-[OBSERVATIONS.md](OBSERVATIONS.md).
+`data/trades.db` is the paper-trade store and `data/audit.log.jsonl` is the audit log. Run only one `serve` per database.
 
-## Limits, honestly
+## Layout
 
-* **No edge was found.** The repo's headline is a negative result. The reusable part is the harness, not a strategy.
-* **The studies are offline and in sample where noted.** Several rest on small samples (n = 32 for the bookmaker
-  comparison, 35 settled live-path orders). Those are marked as directions in the findings, not verdicts.
-* **The H005 result is expected to be weak.** The sample is one correlated midterm event, and the prompt leaked the
-  market price. A rerun would need the fixes listed in the pre-registration.
-* **A real sports-model test is blocked on data.** It is not closed.
-* **Phase B was never run.** The live order path exists, was exercised only in dry run, and `PRIVATE_KEY` was never set.
-  No wallet was funded.
-* **Some scripts are research code.** They read `/tmp` inputs and live endpoints, so a few cannot be rerun as is.
-* **The whale daemon no longer runs as is.** Polymarket retired the Data API v1 and leaderboard endpoints it polls
-  (HTTP 410 on 2026-11-19). `serve` and `whales` would need porting to Data API v2. The market scanner and the
-  order-book studies use the CLOB and Gamma APIs, which still answer.
-* **One bug was never fixed.** The whale universe is frozen at daemon startup. See the 2026-06-03 entry in
-  [OBSERVATIONS.md](OBSERVATIONS.md).
+```
+bot/                 the daemon: whale tracker and trust scores, four-stream paper trader, market scanner,
+                     CLOB client with retry and a circuit breaker, SQLite tracker and audit log, the
+                     readiness gate, the complement-arbitrage scanner, and the dry-run order path
+research/            the study scripts and a FINDINGS file for each hypothesis
+research/crossvenue/ Polymarket vs Kalshi: question matching, an LLM adjudicator for matched pairs, scoring
+friday/              the liquidity-rewards market maker, its replay harness, its tests and its findings
+tests/               15 smoke scripts, and test_smoke.py, which runs them and Friday's tests under pytest
+docs/                the chart above
+FINDINGS.md          the copy-trading verdict
+PLAN.md              the full architecture and schema
+OBSERVATIONS.md      the daemon's running notes
+```
+
+About 6,600 lines in `bot/`, 3,200 in `research/`, 4,100 in `tests/` and 3,400 in `friday/`. Python, SQLite, `scipy` for the z-test and Fisher's exact test, and `rich` for the CLI.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE).
