@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 430" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">The same copy-trading orders under three fill assumptions</title>
+  <desc id="d">Forward-test return on investment: plus 21.8 percent when every order fills at the whale's own price, plus 4.8 percent at the prices real order books offered, and minus 18.1 percent with fills modelled through real book depth.</desc>
+  <rect width="880" height="430" rx="14" fill="#0d1117"/>
+  <rect x="0.5" y="0.5" width="879" height="429" rx="13.5" fill="none" stroke="#30363d"/>
+  <text x="40" y="48" fill="#e6edf3" font-size="20" font-weight="600">The edge was a fill assumption</text>
+  <text x="40" y="74" fill="#9198a1" font-size="14">Same copy-trading forward test, three ways of pricing the fill. Return on investment.</text>
+
+  <!-- zero line at y=250; 5.5 px per percentage point -->
+  <line x1="40" y1="250" x2="840" y2="250" stroke="#484f58" stroke-width="1"/>
+  <text x="40" y="244" fill="#7d8590" font-size="12">0%</text>
+
+  <path d="M150 250 V134.1 a4 4 0 0 1 4 -4 H286 a4 4 0 0 1 4 4 V250 Z" fill="#6cb6ff"/>
+  <text x="220" y="120" fill="#e6edf3" font-size="26" font-weight="600" text-anchor="middle">+21.8%</text>
+  <text x="220" y="280" fill="#e6edf3" font-size="14" font-weight="600" text-anchor="middle">Whale's own price</text>
+  <text x="220" y="300" fill="#9198a1" font-size="12.5" text-anchor="middle">what the first dry run assumed</text>
+
+  <path d="M370 250 V227.6 a4 4 0 0 1 4 -4 H506 a4 4 0 0 1 4 4 V250 Z" fill="#6cb6ff"/>
+  <text x="440" y="212" fill="#e6edf3" font-size="26" font-weight="600" text-anchor="middle">+4.8%</text>
+  <text x="440" y="280" fill="#e6edf3" font-size="14" font-weight="600" text-anchor="middle">Real book prices</text>
+  <text x="440" y="300" fill="#9198a1" font-size="12.5" text-anchor="middle">4.08 cents worse on average</text>
+
+  <path d="M590 250 V345.6 a4 4 0 0 0 4 4 H726 a4 4 0 0 0 4 -4 V250 Z" fill="#6cb6ff"/>
+  <text x="660" y="380" fill="#e6edf3" font-size="26" font-weight="600" text-anchor="middle">−18.1%</text>
+  <text x="660" y="214" fill="#e6edf3" font-size="14" font-weight="600" text-anchor="middle">Realistic fills</text>
+  <text x="660" y="234" fill="#9198a1" font-size="12.5" text-anchor="middle">walked through real depth, 35 settled</text>
+
+  <text x="40" y="412" fill="#7d8590" font-size="12">Source: FINDINGS.md. Paper trading only; no real money was risked.</text>
+</svg>

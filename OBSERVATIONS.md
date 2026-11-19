@@ -5,7 +5,7 @@ do not edit prior entries.
 
 ## Day 1 — 2026-05-22 — Launch
 
-Daemon live under tmux session `polybot`. 50 whales loaded from leaderboard,
+Daemon live. 50 whales loaded from leaderboard,
 11,366 signals ingested in first cycle (historical backfill, not steady rate),
 35/50 whales active. proxyWallet fix confirmed working. Commit 7a0c7fa, tag
 phase-a-launch-v2.
@@ -38,15 +38,15 @@ in `run_forever` — no `last_discovery` timer, no periodic leaderboard refresh.
 Consequence: any wallet that rises through the Polymarket leaderboard after a
 daemon startup is permanently invisible until the next restart.
 
-Discovery: sovereign2013 (`0xee613b3fc183ee44f9da9c05f53e2da107e3debf`, $3.6M
-all-time profit, leaderboard rank 28) was not in the initial tracked universe.
+Discovery: a wallet ranked 28 on the all-time leaderboard was not in the initial
+tracked universe.
 Manually added via `python main.py add-whale` on 2026-06-03 — written to
 `data/whales_manual.json`, will auto-activate on next daemon restart.
 
-### Decision: Do NOT restart to activate sovereign2013 mid-extension
+### Decision: Do NOT restart to activate the new wallet mid-extension
 
 Marginal benefit (~2-4% dataset contribution from one new whale) does not
-justify disrupting 36+ hours of clean in-memory runtime state. Sovereign2013
+justify disrupting 36+ hours of clean in-memory runtime state. It
 will join the universe on whatever restart next legitimately occurs (Phase A.3
 fix, Phase B prep, or any other planned restart).
 

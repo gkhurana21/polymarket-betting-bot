@@ -21,6 +21,7 @@ Run from project root:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -78,6 +79,9 @@ def _book(bids, asks):
 
 
 # ═════════════════════════════════════════════════════════════════════════
+
+
+LIVE = os.environ.get("LIVE_API_TESTS", "1") == "1"   # 0 skips check 7, the only one that calls Polymarket
 
 
 def main() -> int:
@@ -236,49 +240,52 @@ def main() -> int:
     print("  edge: CBO mid-scan → 2 written, scan halted, error recorded   OK")
 
     # ── 7: live integration ────────────────────────────────────────────
-    with tempfile.TemporaryDirectory() as td:
-        tk = Tracker(db_path=Path(td) / "t.db", audit_log_path=Path(td) / "a.jsonl")
-        live = ClobReadOnlyClient(
-            retry_max_attempts=3,
-            retry_initial_backoff_seconds=0.001,
-            retry_max_backoff_seconds=0.01,
-            cb_fail_threshold=20,                  # generous for live integration
-            cb_reset_seconds=60.0,
-            sleep_fn=lambda _s: None,
-        )
-        cfg_live = {
-            "market_filters": {
-                "min_volume_24h_usd": 0,           # live data has no volume field
-                "min_liquidity_usd": 0,
-                "max_spread_bps": 5_000,           # 50% — generous for sampling markets
-                "outcome_labels": ["Yes", "No"],
-                "whitelist_categories": [],
-                "blacklist_categories": [],
-                "blacklist_keywords": [],
-            },
-            "book_snapshot": {"depth_levels": 10},
-        }
-        sc = MarketScanner(client=live, tracker=tk, config=cfg_live)
-        # Cap fetch to keep the smoke fast — first 8 sampling markets.
-        r = sc.scan_once(fetch_limit=8)
-        n_ms = tk._conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0]
-        n_bs = tk._conn.execute("SELECT COUNT(*) FROM book_snapshots").fetchone()[0]
-        assert r.market_snapshots_written == n_ms, (
-            f"ScanResult.market_snapshots_written={r.market_snapshots_written} "
-            f"!= DB count {n_ms}"
-        )
-        assert r.book_snapshots_written == n_bs
-        assert n_ms >= 1, "expected at least 1 market to pass filters and persist"
-        # Spot-check that one persisted row has plausible mid in (0, 1).
-        row = tk._conn.execute(
-            "SELECT mid, spread_bps, liquidity_usd, question FROM market_snapshots LIMIT 1"
-        ).fetchone()
-        assert 0 < row["mid"] < 1, f"mid out of range: {row['mid']}"
-        assert row["spread_bps"] is None or row["spread_bps"] >= 0
-        tk.close()
-        print(f"  live integration: fetched={r.markets_fetched} "
-              f"passed={r.markets_passed_filter} ms_rows={n_ms} bs_rows={n_bs} "
-              f"errors={r.errors}  OK")
+    if LIVE:
+        with tempfile.TemporaryDirectory() as td:
+            tk = Tracker(db_path=Path(td) / "t.db", audit_log_path=Path(td) / "a.jsonl")
+            live = ClobReadOnlyClient(
+                retry_max_attempts=3,
+                retry_initial_backoff_seconds=0.001,
+                retry_max_backoff_seconds=0.01,
+                cb_fail_threshold=20,                  # generous for live integration
+                cb_reset_seconds=60.0,
+                sleep_fn=lambda _s: None,
+            )
+            cfg_live = {
+                "market_filters": {
+                    "min_volume_24h_usd": 0,           # live data has no volume field
+                    "min_liquidity_usd": 0,
+                    "max_spread_bps": 5_000,           # 50% — generous for sampling markets
+                    "outcome_labels": ["Yes", "No"],
+                    "whitelist_categories": [],
+                    "blacklist_categories": [],
+                    "blacklist_keywords": [],
+                },
+                "book_snapshot": {"depth_levels": 10},
+            }
+            sc = MarketScanner(client=live, tracker=tk, config=cfg_live)
+            # Cap fetch to keep the smoke fast — first 8 sampling markets.
+            r = sc.scan_once(fetch_limit=8)
+            n_ms = tk._conn.execute("SELECT COUNT(*) FROM market_snapshots").fetchone()[0]
+            n_bs = tk._conn.execute("SELECT COUNT(*) FROM book_snapshots").fetchone()[0]
+            assert r.market_snapshots_written == n_ms, (
+                f"ScanResult.market_snapshots_written={r.market_snapshots_written} "
+                f"!= DB count {n_ms}"
+            )
+            assert r.book_snapshots_written == n_bs
+            assert n_ms >= 1, "expected at least 1 market to pass filters and persist"
+            # Spot-check that one persisted row has plausible mid in (0, 1).
+            row = tk._conn.execute(
+                "SELECT mid, spread_bps, liquidity_usd, question FROM market_snapshots LIMIT 1"
+            ).fetchone()
+            assert 0 < row["mid"] < 1, f"mid out of range: {row['mid']}"
+            assert row["spread_bps"] is None or row["spread_bps"] >= 0
+            tk.close()
+            print(f"  live integration: fetched={r.markets_fetched} "
+                  f"passed={r.markets_passed_filter} ms_rows={n_ms} bs_rows={n_bs} "
+                  f"errors={r.errors}  OK")
+    else:
+        print("  live integration: SKIPPED (LIVE_API_TESTS=0)")
 
     print("\nmodule 5 smoke: OK")
     return 0

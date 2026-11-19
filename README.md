@@ -14,6 +14,7 @@
 
 <br/>
 
+[![CI](https://img.shields.io/github/actions/workflow/status/gkhurana21/polymarket-betting-bot/ci.yml?branch=master&style=flat-square&label=CI)](https://github.com/gkhurana21/polymarket-betting-bot/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite&logoColor=white)
 ![Polymarket](https://img.shields.io/badge/Polymarket-CLOB%20API-2E5CFF?style=flat-square)
@@ -26,6 +27,8 @@
 </div>
 
 ---
+
+![The same copy-trading forward test under three fill assumptions: plus 21.8% at the whale's own price, plus 4.8% at real book prices, minus 18.1% with realistic fills.](docs/fill-assumption.svg)
 
 > **Disclaimer:** This is research and paper trading only. Prediction markets involve financial risk and you can lose
 > money. The code refuses to start with `dry_run: false` in the observation phase. Nothing here is financial advice.
@@ -44,9 +47,9 @@ including the ones that hurt.
 
 <table>
 <tr>
+<td align="center" width="25%"><h3>11</h3><sub>trading hypotheses tested: 10 rejected with the deciding number, 1 pre-registered and pending</sub></td>
 <td align="center" width="25%"><h3>21,243</h3><sub>resolved paper signals in the copy-trading test</sub></td>
 <td align="center" width="25%"><h3>−18.1%</h3><sub>ROI of the live-path forward test with realistic fills (35 settled)</sub></td>
-<td align="center" width="25%"><h3>0 / 908</h3><sub>markets where YES + NO could be bought below $1</sub></td>
 <td align="center" width="25%"><h3>$0</h3><sub>real money risked, over about 71 days of observation</sub></td>
 </tr>
 </table>
@@ -138,9 +141,10 @@ research/*.py ──> read-only studies on the stored corpus and public endpoint
 Numbers: about 6,600 lines in `bot/`, about 3,200 in `research/` (crossvenue included), about 4,100 in `tests/`, and about 3,400 in `friday/` (550 of them tests). Python, SQLite, `scipy`
 for the z-test and Fisher's exact test, and `rich` for the CLI.
 
-**Tests.** There are 15 offline smoke scripts in `tests/`, covering modules 1 to 12, the opportunity funnel, the LLM
-forecaster and the forward scorer. They use synthetic books and a temporary SQLite file, and they run one at a time.
-They are plain scripts, so `pytest --collect-only` finds 0 tests.
+**Tests.** `pytest` runs 23 tests offline, and CI runs them on every push: 15 smoke scripts in `tests/` (modules 1 to
+12, the opportunity funnel, the LLM forecaster and the forward scorer) and Friday's 8 test modules. Each is a plain
+script that asserts as it goes, run in its own process on synthetic books and a temporary SQLite file. Three checks
+that call Polymarket itself are skipped offline (`LIVE_API_TESTS=1` turns them on).
 
 **Fees.** Polymarket charges takers `C × feeRate × p × (1 − p)` and never charges makers. A smoke test checks the code
 against the published table at p = 0.01, 0.05, 0.50 and 0.95.
@@ -167,9 +171,10 @@ python main.py arb-scan              # one read-only complement arbitrage pass
 python main.py arb-status --days 7   # frequency, capacity, edge, rejections
 ```
 
-Run one smoke test, or a study:
+Run the tests, one smoke script, or a study:
 
 ```bash
+pytest -q                                   # all 23, offline
 .venv/bin/python tests/smoke_module12.py
 python3 research/longshot_study.py --buffer-hours 6 --max-spread 0.05
 ```
@@ -189,6 +194,9 @@ database. The full architecture and schema are in [PLAN.md](PLAN.md), and the da
 * **Phase B was never run.** The live order path exists, was exercised only in dry run, and `PRIVATE_KEY` was never set.
   No wallet was funded.
 * **Some scripts are research code.** They read `/tmp` inputs and live endpoints, so a few cannot be rerun as is.
+* **The whale daemon no longer runs as is.** Polymarket retired the Data API v1 and leaderboard endpoints it polls
+  (HTTP 410 on 2026-11-19). `serve` and `whales` would need porting to Data API v2. The market scanner and the
+  order-book studies use the CLOB and Gamma APIs, which still answer.
 * **One bug was never fixed.** The whale universe is frozen at daemon startup. See the 2026-06-03 entry in
   [OBSERVATIONS.md](OBSERVATIONS.md).
 

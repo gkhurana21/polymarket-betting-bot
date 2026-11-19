@@ -178,7 +178,7 @@ strategy:                                    # [Phase B]
   # Sizing mirrors the VALIDATED copy_whale paper stream (Phase A, 58.9%,
   # BUILD_B_FULL). Proportional to the whale's bet, clamped. Do NOT switch to
   # Kelly-on-trust: it was never validated and max-sizes deep-longshot bets.
-  bankroll_usd: 10000                        # CONFIRM before going live — user said "10"
+  bankroll_usd: 10000                        # paper bankroll; confirm before any live run
                                              # (interpreted as $10,000; change to actual
                                              # funded amount before setting dry_run: false)
   proportional_scale: 0.01                   # bet ≈ 1% of whale's size (same as paper stream)

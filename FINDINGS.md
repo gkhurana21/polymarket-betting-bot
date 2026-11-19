@@ -100,10 +100,9 @@ act on it.
 
 ## Operational state at conclusion
 
-- launchd job `com.majesticgk.polybot` **stopped** (`launchctl bootout`).
-- Plist restored to `main.py serve` (safe Phase A observation) as the default if reloaded.
+- The observation daemon is stopped.
 - `dry_run: true` throughout. `PRIVATE_KEY` never set. No wallet funded.
-- `data/trades.db` preserved — 82k+ paper trades, 140 settled live-path orders.
-
-To resume observation only:
-`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.majesticgk.polybot.plist`
+- `data/trades.db` is kept locally and is not in the repo: 82k+ paper trades and 140 settled dry-run orders on the
+  live path: 105 from before the realistic-fill fix and the 35 after it that make up the clean forward test above.
+- Four more of the post-fix orders settled after this write-up. All 39 together: −25.1% ROI (checked 2026-11-19). The
+  verdict does not change.
